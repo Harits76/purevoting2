@@ -1,0 +1,28 @@
+{
+  "event_id": "evt_RCQR9BB5XJ1E3AJ1V4K5N5H6M5",
+  "schema_version": "1",
+  "election_id": "elc_WXWCBYB6WK952SWA0432CF1XMW",
+  "type": "PROPOSAL_CLOSED",
+  "source": "gateway",
+  "seq": 4,
+  "occurred_at": "2026-11-03T09:31:02Z",
+  "time_precision": "exact",
+  "actor": {
+    "kind": "system"
+  },
+  "payload": {
+    "action_id": "act_2GFSGTZJB48EY4HDD14HTWF32B",
+    "proposal_id": "prp_JQ85Q8WN821YPK214Y4KM844WQ",
+    "outcome": "APPROVED"
+  },
+  "payload_hash": "437b797b1635a34f0f1f095bc40e4612afb8dc1974625ca1f5bb44397e60e333",
+  "received_at": "2026-11-03T09:31:04Z",
+  "anchor": {
+    "status": "ANCHORED",
+    "anchor_id": "anc_196VFEZNXSPNN8ZZ42TP0R5X1Q",
+    "mode": "immediate",
+    "merkle_root": "cd6f1ea271f2b767063cc2cfd8171d8efdb13c4c7295efa8fa808b6b7e0d9661",
+    "tx_hash": "0xd96cfedabc9ea828ea9840bcbb8c14e348600297284b4e94cab00e7999629974",
+    "block_number": 3735
+  }
+}

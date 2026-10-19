@@ -1,0 +1,29 @@
+{
+  "event_id": "evt_J9WB6GZV79M1H9HSHME5YCQG39",
+  "schema_version": "1",
+  "election_id": "elc_WXWCBYB6WK952SWA0432CF1XMW",
+  "type": "ELECTION_FINALIZED",
+  "source": "core",
+  "seq": 16,
+  "checkpoint": 12,
+  "occurred_at": "2026-11-03T12:30:00Z",
+  "time_precision": "exact",
+  "actor": {
+    "kind": "admin",
+    "org_id": "org_commission",
+    "user_id": "usr_CEJZ05XHT5GMEJ146S6JR410DD"
+  },
+  "payload": {
+    "result_hash": "f3446ed36d91823a884d77df0ce9c0b0dc2d2189882865058aac0b547c328bf2"
+  },
+  "payload_hash": "e73c9118ff263571561330e98288d210bc8a884917c1f1a9f42226d5d4f6e2b6",
+  "received_at": "2026-11-03T12:30:02Z",
+  "anchor": {
+    "status": "ANCHORED",
+    "anchor_id": "anc_40K50BNY8CTY2TPS3DGHCJFW3B",
+    "mode": "immediate",
+    "merkle_root": "a7046ac4e5f3e8cade4aeffa3bb6a183bff517b7e1ad7bf54c41a412a08dde63",
+    "tx_hash": "0x6f420c9939e9c0c8cdf63f20546d8e5b6824d5c8ebf7dce942fa5339232c9692",
+    "block_number": 9104
+  }
+}

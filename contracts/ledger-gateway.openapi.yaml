@@ -1,0 +1,965 @@
+openapi: 3.1.0
+info:
+  title: PureVoting 2.0 — Ledger Gateway API
+  version: 1.0.0
+  description: |
+    Owned by the ledger component (Harits). The only way other components touch the blockchain.
+    Platform-independent (D-02).
+
+    Responsibilities
+    - Store every ledger event and commit it on chain: system events immediately (one anchor per event or
+      small group), voter-side events (`TOKEN_USED`, `BALLOT_RECEIVED`) in shuffled Merkle batches (D-04).
+    - Apply core system events in `seq` order per election; hold or answer RETRY_LATER on gaps (D-12).
+    - Validate events against election state. Who enforces what (do not overclaim in reports):
+      * **Smart contract** enforces the state machine and approval signatures for system events
+        (e.g. ROSTER_AMENDED without an APPROVED proposal, second TALLY_PUBLISHED, anything after FINALIZED),
+        and rejects a batched anchor whose declared bucket range ends after the effective window end.
+      * **Gateway software** enforces per-event checks on voter-side events (window, duplicate token_hash /
+        nullifier_hash) because individual voter events are not visible on chain (privacy trade-off, D-04).
+    - Keep a tamper-evident log of every rejected submission (`/v1/rejections`), included in the next anchor.
+    - Run multi-organization approval proposals (D-11) and emit ADMIN_ACTION_REQUESTED, APPROVAL_RECORDED,
+      PROPOSAL_CLOSED itself.
+
+    Business approval vs chain consensus: organization *approvals* are signatures made by each organization's
+    own key (contracts/hashing.md#signatures). Validator-node *consensus/endorsement* only orders and commits
+    transactions. Running several Docker nodes is not evidence that independent organizations operate them.
+
+    Authentication: `X-Service-Key`, a different key per calling service. Allowed callers per operation are
+    given by the `security` of each operation (core = Core API, rule = Rule Engine, agent = Audit Agent).
+    The only Gateway write open to the Rule Engine is `POST /v1/finding-records`; the Audit Agent has none
+    (any write with agentKey → 403). Who operates the Gateway is D-26; the Gateway operator can delay relaying but cannot
+    forge signed approvals, reviews or finding records, and every signer can bypass it through direct submission.
+
+    Core learns proposal outcomes by polling `GET /v1/proposals?election_id=&status=PENDING` every 10 s
+    (and reading PROPOSAL_CLOSED events). A proposal is reported APPROVED only after every APPROVAL_RECORDED that made it
+    so (relayed or indexed from direct chain submissions) is stored in the ledger, so R4 always sees the approvals.
+
+    Timeouts: callers use 5 s per request; `POST /v1/events` is safe to retry (idempotent by event_id).
+servers:
+  - url: http://ledger-gateway:8100
+
+tags:
+  - name: events
+  - name: anchors
+  - name: governance
+  - name: state
+  - name: ops
+
+paths:
+  /v1/events:
+    post:
+      tags: [events]
+      operationId: submitEvents
+      summary: Submit ledger events (core only — other service keys get 403; idempotent by event_id)
+      description: |
+        Outcomes per event:
+        - ACCEPTED — stored; for a system event this means its contract transaction is included in a block (voter events
+          are anchored later in their batch). While a system event's transaction is still pending, a retry with the same
+          event_id gets RETRY_LATER.
+        - DUPLICATE — same event_id with the same payload_hash already stored; treat as success.
+        - CONFLICT — same event_id with a different payload_hash; never retried, Core raises an alert.
+        - REJECTED — violates a rule. Recorded in `/v1/rejections`. Not retried. reject_code values:
+          ELECTION_NOT_OPEN (voter event outside the effective window, by the bucket formula of README R2),
+          DUPLICATE_CONTENT (token_hash / nullifier_hash already accepted), TOKEN_REVOKED (TOKEN_USED for a revoked
+          token), TOKEN_ALREADY_USED (TOKEN_REVOKED for a token with an accepted TOKEN_USED), INVALID_STATE_TRANSITION,
+          SIGNATURE_INVALID, ORG_NOT_REGISTERED, ALREADY_EXECUTED (second ADMIN_ACTION_EXECUTED for a proposal).
+        - RETRY_LATER — seq gap, prerequisite missing (e.g. voter event before ELECTION_OPENED is applied), or a block-time
+          precondition not reached yet (TIME_NOT_REACHED, e.g. ELECTION_OPENED a few seconds before window_start by the chain clock).
+          Retry with exponential backoff (1 s → 60 s).
+
+        Delivery order (contract for the Core outbox worker): the release unit is the time bucket. At the end of
+        bucket b the worker releases, in this order, (1) all voter events created in b, shuffled, then (2) all system
+        events created in b, in seq order (a unit larger than 500 events is split into consecutive requests). A SYSTEM
+        event created exactly on a bucket boundary belongs to the bucket that ends there (voter events always use floor,
+        i.e. a voter event at a boundary belongs to the bucket that starts there), so state transitions scheduled on boundaries (ELECTION_OPENED at window_start, ELECTION_CLOSED,
+        periodic CHECKPOINT_COMMITTED) are released immediately. Units are sent in bucket order; the next request is
+        sent only after every
+        event of the previous one has a final outcome (ACCEPTED, DUPLICATE, REJECTED, CONFLICT). The Gateway therefore
+        cannot tell where inside a bucket a system event happened relative to voter events. Periodic checkpoints are
+        committed every checkpoint_interval_seconds (an integer multiple of the bucket) on bucket boundaries, so when CHECKPOINT_COMMITTED k is ACCEPTED, every voter event with checkpoint <= k already
+        has a final outcome (accepted event or rejection record).
+
+        Voter-side events: the Gateway MUST NOT record their arrival time or arrival order; it only assigns them to the
+        open batch.
+
+        If the smart contract refuses a batched anchor (should only happen on a Gateway bug, since every voter event
+        was window-checked on acceptance), the events stay PENDING and the Gateway raises an ANCHOR_REJECTED alert
+        (Core POST /internal/v1/audit-alerts with gatewayKey). Recovery is a manual
+        Gateway-operator action: fix the cause and re-anchor the same events in a new batch (same leaves, new anchor).
+        Core's tally refuses while events are PENDING (OUTBOX_NOT_DRAINED); if recovery is impossible the election can only
+        be voided (ELECTION_VOID).
+      security: [{ coreKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [events]
+              properties:
+                events:
+                  type: array
+                  minItems: 1
+                  maxItems: 500
+                  items:
+                    $ref: './ledger-events.schema.json#/$defs/LedgerEventSubmission'
+      responses:
+        '200':
+          description: Per-event outcome
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [results]
+                properties:
+                  results:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SubmitResult'
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '503': { $ref: '#/components/responses/Problem' }
+    get:
+      tags: [events]
+      operationId: listEvents
+      summary: Query stored events
+      description: |
+        Order: by occurred_at, then event_id. Voter-side events share bucketed occurred_at values and random
+        evr_ IDs, so their relative order inside a bucket carries no timing information.
+      security: [{ coreKey: [] }, { ruleKey: [] }, { agentKey: [] }, { auditorKey: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/ElectionIdQuery' }
+        - name: type
+          in: query
+          schema:
+            type: array
+            items: { $ref: './ledger-events.schema.json#/$defs/EventType' }
+          style: form
+          explode: true
+        - name: checkpoint_max
+          in: query
+          description: Only events with checkpoint <= this (applies to core and gateway events alike, so a rule run for k is reproducible)
+          schema: { $ref: './common.schema.json#/$defs/Checkpoint' }
+        - name: from
+          in: query
+          description: occurred_at >= from
+          schema: { $ref: './common.schema.json#/$defs/Timestamp' }
+        - name: to
+          in: query
+          description: occurred_at < to
+          schema: { $ref: './common.schema.json#/$defs/Timestamp' }
+        - name: anchor_status
+          in: query
+          schema: { type: string, enum: [PENDING, ANCHORED] }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Cursor' }
+      responses:
+        '200':
+          description: Events
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor, last_core_seq]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: './ledger-events.schema.json' }
+                  next_cursor: { type: [string, 'null'] }
+                  last_core_seq: { type: integer, minimum: 0, description: Highest contiguous core seq applied for this election }
+        '400': { $ref: '#/components/responses/Problem' }
+
+  /v1/events/{event_id}:
+    get:
+      tags: [events]
+      operationId: getEvent
+      security: [{ coreKey: [] }, { ruleKey: [] }, { agentKey: [] }, { auditorKey: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/EventIdPath' }
+      responses:
+        '200':
+          description: The event
+          content:
+            application/json:
+              schema: { $ref: './ledger-events.schema.json' }
+        '404': { $ref: '#/components/responses/Problem' }
+
+  /v1/events/{event_id}/proof:
+    get:
+      tags: [events]
+      operationId: getEventProof
+      summary: Merkle inclusion proof of an anchored event
+      security: [{ coreKey: [] }, { ruleKey: [] }, { agentKey: [] }, { auditorKey: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/EventIdPath' }
+      responses:
+        '200':
+          description: Proof
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MerkleProof' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409':
+          description: Not anchored yet (code CONFLICT)
+          content:
+            application/problem+json:
+              schema: { $ref: './common.schema.json#/$defs/Problem' }
+
+  /v1/rejections:
+    get:
+      tags: [events]
+      operationId: listRejections
+      summary: Every rejected submission (audit trail of refused attempts), ordered by checkpoint then rejection_id (random), never by arrival
+      security: [{ coreKey: [] }, { ruleKey: [] }, { agentKey: [] }, { auditorKey: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/ElectionIdQuery' }
+        - name: checkpoint_max
+          in: query
+          schema: { $ref: './common.schema.json#/$defs/Checkpoint' }
+        - name: reject_code
+          in: query
+          schema: { $ref: './common.schema.json#/$defs/ProblemCode' }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Cursor' }
+      responses:
+        '200':
+          description: Rejections
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Rejection' }
+                  next_cursor: { type: [string, 'null'] }
+
+  /v1/rejections/{rejection_id}:
+    get:
+      tags: [events]
+      operationId: getRejection
+      security: [{ coreKey: [] }, { ruleKey: [] }, { agentKey: [] }, { auditorKey: [] }]
+      parameters:
+        - name: rejection_id
+          in: path
+          required: true
+          schema: { $ref: './common.schema.json#/$defs/RejectionId' }
+      responses:
+        '200':
+          description: Rejection
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Rejection' }
+        '404': { $ref: '#/components/responses/Problem' }
+
+  /v1/verify:
+    post:
+      tags: [events]
+      operationId: verifyEvents
+      summary: Re-check payload hash, leaf hash, Merkle proof and on-chain root (convenience; R5 also recomputes independently)
+      security: [{ coreKey: [] }, { ruleKey: [] }, { agentKey: [] }, { auditorKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [event_ids]
+              properties:
+                event_ids:
+                  type: array
+                  minItems: 1
+                  maxItems: 1000
+                  items: { $ref: './common.schema.json#/$defs/EventId' }
+      responses:
+        '200':
+          description: Verification result per event
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [results]
+                properties:
+                  results:
+                    type: array
+                    items: { $ref: '#/components/schemas/VerifyResult' }
+
+  /v1/anchors:
+    get:
+      tags: [anchors]
+      operationId: listAnchors
+      security: [{ coreKey: [] }, { ruleKey: [] }, { agentKey: [] }, { auditorKey: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/ElectionIdQuery' }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Cursor' }
+      responses:
+        '200':
+          description: Anchors ordered by block_number
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/AnchorRecord' }
+                  next_cursor: { type: [string, 'null'] }
+
+  /v1/anchors/{anchor_id}:
+    get:
+      tags: [anchors]
+      operationId: getAnchor
+      security: [{ coreKey: [] }, { ruleKey: [] }, { agentKey: [] }, { auditorKey: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/AnchorIdPath' }
+      responses:
+        '200':
+          description: Anchor
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnchorRecord' }
+        '404': { $ref: '#/components/responses/Problem' }
+
+  /v1/anchors/{anchor_id}/leaves:
+    get:
+      tags: [anchors]
+      operationId: getAnchorLeaves
+      summary: Leaves of an anchor in tree order, so anyone can recompute merkle_root and compare with the chain
+      security: [{ coreKey: [] }, { ruleKey: [] }, { agentKey: [] }, { auditorKey: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/AnchorIdPath' }
+      responses:
+        '200':
+          description: Leaves
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [anchor_id, leaves, rejections_root, rejection_ids]
+                properties:
+                  anchor_id: { $ref: './common.schema.json#/$defs/AnchorId' }
+                  leaves:
+                    type: array
+                    items:
+                      type: object
+                      required: [event_id, leaf_hash]
+                      properties:
+                        event_id: { $ref: './common.schema.json#/$defs/EventId' }
+                        leaf_hash: { $ref: './common.schema.json#/$defs/Sha256Hex' }
+                  rejection_ids:
+                    type: array
+                    description: Rejections covered by rejections_root (R5 recomputes it from these records)
+                    items: { $ref: './common.schema.json#/$defs/RejectionId' }
+                  rejections_root:
+                    $ref: './common.schema.json#/$defs/Sha256Hex'
+                    description: rejections_root as defined in hashing.md (set_root of rejection_leaf; detail and anchor_id not hashed)
+        '404': { $ref: '#/components/responses/Problem' }
+
+  /v1/proposals:
+    post:
+      tags: [governance]
+      operationId: createProposal
+      summary: Open an approval proposal for a privileged admin action (core only, D-11; other keys → 403)
+      description: |
+        Idempotent by proposal_id: the same body again → 200 with the existing proposal; a different body → 409.
+        The request carries the requesting organization's signature over the request digest (hashing.md).
+        The contract verifies it against the organization registry and emits ADMIN_ACTION_REQUESTED.
+        Expiry: ELECTION_CREATED.proposal_ttl_hours.
+      security: [{ coreKey: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProposalCreate' }
+      responses:
+        '403': { $ref: '#/components/responses/Problem' }
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Proposal' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422':
+          description: LEDGER_REJECTED, SIGNATURE_INVALID or INVALID_STATE_TRANSITION
+          content:
+            application/problem+json:
+              schema: { $ref: './common.schema.json#/$defs/Problem' }
+    get:
+      tags: [governance]
+      operationId: listProposals
+      security: [{ coreKey: [] }, { ruleKey: [] }, { agentKey: [] }, { auditorKey: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/ElectionIdQuery' }
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/ProposalStatus' }
+      responses:
+        '200':
+          description: Proposals
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Proposal' }
+
+  /v1/proposals/{proposal_id}:
+    get:
+      tags: [governance]
+      operationId: getProposal
+      security: [{ coreKey: [] }, { ruleKey: [] }, { agentKey: [] }, { auditorKey: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/ProposalIdPath' }
+      responses:
+        '200':
+          description: Proposal
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Proposal' }
+        '404': { $ref: '#/components/responses/Problem' }
+
+  /v1/proposals/{proposal_id}/decisions:
+    post:
+      tags: [governance]
+      operationId: decideProposal
+      summary: Record one organization's signed APPROVE / REJECT (core relays it; it cannot create it)
+      description: |
+        The contract verifies the signature against the key registered for org_id, rejects organizations that do not take
+        part in the election (ORG_NOT_REGISTERED), and rejects the requesting
+        organization (SELF_APPROVAL_NOT_ALLOWED), organizations not in the election (403 ORG_NOT_REGISTERED) and repeated
+        decisions. Emits APPROVAL_RECORDED.
+        When approvals reach the threshold → APPROVED; when approval becomes impossible → REJECTED;
+        both emit PROPOSAL_CLOSED. Retry-safe: the same org sending the same decision with the same signature again
+        gets 200 with the current proposal; a different decision or signature from an org that already decided gets 409.
+      security: [{ coreKey: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/ProposalIdPath' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [org_id, approver_user_id, decision, signature]
+              properties:
+                org_id: { $ref: './common.schema.json#/$defs/OrgId' }
+                approver_user_id: { $ref: './common.schema.json#/$defs/UserId' }
+                decision: { type: string, enum: [APPROVE, REJECT] }
+                signature: { $ref: './common.schema.json#/$defs/Signature' }
+      responses:
+        '403': { $ref: '#/components/responses/Problem' }
+        '200':
+          description: Updated proposal
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Proposal' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409':
+          description: SELF_APPROVAL_NOT_ALLOWED, already decided, or proposal not pending
+          content:
+            application/problem+json:
+              schema: { $ref: './common.schema.json#/$defs/Problem' }
+        '422':
+          description: SIGNATURE_INVALID
+          content:
+            application/problem+json:
+              schema: { $ref: './common.schema.json#/$defs/Problem' }
+
+  /v1/finding-records:
+    post:
+      tags: [governance]
+      operationId: recordFinding
+      summary: Rule Engine registers a finding (hash only). Emits FINDING_RECORDED. Core cannot suppress or alter findings.
+      description: The Rule Engine stores the finding body durably before calling this. Idempotent by finding_id (same hash → 200, different hash → 409). finding_checkpoint must be <= the last committed checkpoint applied at the Gateway (422 CHECKPOINT_NOT_FOUND otherwise), so a finding — and a superseding PASS — can never refer to a future checkpoint. The full body is stored at Core (POST /internal/v1/findings) with recorded_event_id.
+      security: [{ ruleKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [election_id, finding_id, rule_id, result, finding_checkpoint, finding_hash, signature]
+              properties:
+                signature: { $ref: './common.schema.json#/$defs/Signature', description: 'Rule Engine signature over the finding record digest (hashing.md); the contract verifies it against ruleEngineSigner. The Rule Engine may also call submitFindingRecord on chain directly.' }
+                election_id: { $ref: './common.schema.json#/$defs/ElectionId' }
+                finding_id: { $ref: './common.schema.json#/$defs/FindingId' }
+                rule_id: { $ref: './common.schema.json#/$defs/RuleId' }
+                result: { $ref: './common.schema.json#/$defs/RuleResult' }
+                finding_checkpoint: { $ref: './common.schema.json#/$defs/Checkpoint' }
+                finding_hash: { $ref: './common.schema.json#/$defs/Sha256Hex' }
+      responses:
+        '201':
+          description: Recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [event_id]
+                properties:
+                  event_id: { $ref: './common.schema.json#/$defs/SystemEventId' }
+        '200': { description: Identical resubmission }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422':
+          description: CHECKPOINT_NOT_FOUND (finding_checkpoint not yet committed) or SIGNATURE_INVALID
+          content:
+            application/problem+json:
+              schema: { $ref: './common.schema.json#/$defs/Problem' }
+    get:
+      tags: [governance]
+      operationId: listFindingRecords
+      security: [{ coreKey: [] }, { ruleKey: [] }, { agentKey: [] }, { auditorKey: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/ElectionIdQuery' }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Cursor' }
+      responses:
+        '200':
+          description: FINDING_RECORDED and FINDING_REVIEWED events of the election, grouped per finding
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  next_cursor: { type: [string, 'null'] }
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [finding_id, recorded, reviews, contract_status]
+                      properties:
+                        finding_id: { $ref: './common.schema.json#/$defs/FindingId' }
+                        contract_status:
+                          type: string
+                          enum: [NOT_REQUIRED, PENDING, RESOLVED, SUPERSEDED, CONFIRMED_ISSUE]
+                          description: Status as computed by the contract (findingRecord); Core shows this value and does not re-derive it
+                        recorded: { $ref: './ledger-events.schema.json' }
+                        reviews:
+                          type: array
+                          items: { $ref: './ledger-events.schema.json' }
+
+  /v1/finding-records/{finding_id}/reviews:
+    post:
+      tags: [governance]
+      operationId: reviewFindingRecord
+      summary: Record one organization's signed review of a finding (core relays it; it cannot create it). Emits FINDING_REVIEWED.
+      description: |
+        The contract verifies the signature against the organization registry, refuses organizations that do not take
+        part in the election (ELECTION_CREATED.organizations), and refuses reviews of PASS findings.
+        Retry-safe: the same organization sending the same decision, note_hash and signature again gets 200 with the
+        existing event_id; a different review from an organization that already reviewed gets 409. Reviews by operator_org are recorded but never count
+        toward the quorum. ELECTION_FINALIZED is refused by the contract unless every FAIL / INCONCLUSIVE finding record
+        of the election is RESOLVED or SUPERSEDED and R1–R5 records exist for the TALLY checkpoint.
+        Organizations can also submit reviews (and proposal decisions) directly to the contract
+        (chain-interface.md submitFindingReview / submitDecision) without Core; the Gateway indexes those chain events
+        into the same FINDING_REVIEWED / APPROVAL_RECORDED ledger events, so Core cannot censor them.
+      security: [{ coreKey: [] }]
+      parameters:
+        - name: finding_id
+          in: path
+          required: true
+          schema: { $ref: './common.schema.json#/$defs/FindingId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [org_id, reviewer_user_id, decision, note_hash, signature]
+              properties:
+                org_id: { $ref: './common.schema.json#/$defs/OrgId' }
+                reviewer_user_id: { $ref: './common.schema.json#/$defs/UserId' }
+                decision: { $ref: './common.schema.json#/$defs/FindingReviewDecision' }
+                note_hash: { $ref: './common.schema.json#/$defs/Sha256Hex' }
+                signature: { $ref: './common.schema.json#/$defs/Signature' }
+      responses:
+        '201':
+          description: Recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [event_id]
+                properties:
+                  event_id: { $ref: './common.schema.json#/$defs/SystemEventId' }
+        '200':
+          description: Identical retry; existing event_id
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [event_id]
+                properties:
+                  event_id: { $ref: './common.schema.json#/$defs/SystemEventId' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422':
+          description: SIGNATURE_INVALID or ORG_NOT_REGISTERED
+          content:
+            application/problem+json:
+              schema: { $ref: './common.schema.json#/$defs/Problem' }
+
+  /v1/chain:
+    get:
+      tags: [ops]
+      operationId: getChainInfo
+      summary: What an auditor needs to read anchors directly from the chain, without trusting the Gateway (contracts/chain-interface.md)
+      security: [{ coreKey: [] }, { ruleKey: [] }, { agentKey: [] }, { auditorKey: [] }]
+      responses:
+        '200':
+          description: Chain access information
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [platform, chain_id, contract_address, interface_version, rpc_urls]
+                properties:
+                  platform: { type: string, enum: [besu, fabric, other] }
+                  chain_id: { type: string }
+                  contract_address: { type: string, description: Address (Besu) or chaincode name (Fabric) implementing chain-interface.md }
+                  interface_version: { type: string, pattern: '^\d+\.\d+\.\d+$' }
+                  rpc_urls:
+                    type: array
+                    minItems: 1
+                    items: { type: string }
+                    description: One per validator node. Convenience only — readers use the pinned chain configuration (chain-interface.md) and alert if this response differs from it
+
+  /v1/organizations:
+    get:
+      tags: [governance]
+      operationId: listOrganizations
+      summary: On-chain organization registry (org_id → signer key), written by each organization's own node account at network setup
+      security: [{ coreKey: [] }, { ruleKey: [] }, { agentKey: [] }, { auditorKey: [] }]
+      responses:
+        '200':
+          description: Registered organizations
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [org_id, signer, registered_by, tx_hash, block_number, is_operator]
+                      properties:
+                        org_id: { $ref: './common.schema.json#/$defs/OrgId' }
+                        signer: { type: string }
+                        registered_by: { type: string, description: Node account that sent the registration transaction (must belong to the same org) }
+                        is_operator: { type: boolean, description: True for the confirmed operatorOrg (the organization operating Core) }
+                        tx_hash: { $ref: './common.schema.json#/$defs/TxHash' }
+                        block_number: { type: integer, minimum: 0 }
+
+  /v1/elections/{election_id}/state:
+    get:
+      tags: [state]
+      operationId: getElectionState
+      summary: Election state as recorded in the smart contract
+      security: [{ coreKey: [] }, { ruleKey: [] }, { agentKey: [] }, { auditorKey: [] }]
+      parameters:
+        - name: election_id
+          in: path
+          required: true
+          schema: { $ref: './common.schema.json#/$defs/ElectionId' }
+      responses:
+        '200':
+          description: State
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ElectionChainState' }
+        '404': { $ref: '#/components/responses/Problem' }
+
+  /v1/nodes:
+    get:
+      tags: [ops]
+      operationId: listNodes
+      security: [{ coreKey: [] }, { ruleKey: [] }, { agentKey: [] }, { auditorKey: [] }]
+      responses:
+        '200':
+          description: Validator nodes
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/NodeStatus' }
+
+  /v1/health:
+    get:
+      tags: [ops]
+      operationId: health
+      security: []
+      responses:
+        '200':
+          description: Gateway is up
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, enum: [ok, degraded] }
+                  chain_reachable: { type: boolean }
+                  pending_events: { type: integer, minimum: 0 }
+
+components:
+  securitySchemes:
+    coreKey:
+      type: apiKey
+      in: header
+      name: X-Service-Key
+      description: Key issued to Core API
+    auditorKey:
+      type: apiKey
+      in: header
+      name: X-Service-Key
+      description: Read-only key issued to each participating organization (and invited auditors) so they can re-run the rules on ledger data; same read rights as agentKey
+    ruleKey:
+      type: apiKey
+      in: header
+      name: X-Service-Key
+      description: Key issued to the Rule Engine (read access, plus POST /v1/finding-records only)
+    agentKey:
+      type: apiKey
+      in: header
+      name: X-Service-Key
+      description: Key issued to the Audit Agent (read-only here)
+
+  parameters:
+    ElectionIdQuery:
+      name: election_id
+      in: query
+      required: true
+      schema: { $ref: './common.schema.json#/$defs/ElectionId' }
+    EventIdPath:
+      name: event_id
+      in: path
+      required: true
+      schema: { $ref: './common.schema.json#/$defs/EventId' }
+    ProposalIdPath:
+      name: proposal_id
+      in: path
+      required: true
+      schema: { $ref: './common.schema.json#/$defs/ProposalId' }
+    AnchorIdPath:
+      name: anchor_id
+      in: path
+      required: true
+      schema: { $ref: './common.schema.json#/$defs/AnchorId' }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: Same key + same body within 24 h returns the original response
+      schema: { type: string, minLength: 8, maxLength: 64 }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
+    Cursor:
+      name: cursor
+      in: query
+      schema: { type: string }
+
+  responses:
+    Problem:
+      description: Error
+      content:
+        application/problem+json:
+          schema: { $ref: './common.schema.json#/$defs/Problem' }
+
+  schemas:
+    SubmitResult:
+      type: object
+      required: [event_id, status]
+      properties:
+        event_id: { $ref: './common.schema.json#/$defs/EventId' }
+        status: { type: string, enum: [ACCEPTED, DUPLICATE, CONFLICT, REJECTED, RETRY_LATER] }
+        anchor_mode: { type: string, enum: [immediate, batched] }
+        reject_code: { $ref: './common.schema.json#/$defs/ProblemCode' }
+        rejection_id: { $ref: './common.schema.json#/$defs/RejectionId' }
+        tx_hash: { $ref: './common.schema.json#/$defs/TxHash', description: 'System events with status ACCEPTED or DUPLICATE: hash of the including transaction' }
+        block_number: { type: integer, minimum: 0, description: 'System events with status ACCEPTED or DUPLICATE: block that includes the transaction (readers wait until their node has reached it)' }
+        detail: { type: string }
+
+    Rejection:
+      type: object
+      required: [rejection_id, election_id, event_id, type, checkpoint, reject_code, recorded_at, payload_hash, subject_hash]
+      description: Hashed as rejection_leaf (hashing.md); detail and anchor_id are not hashed
+      properties:
+        rejection_id: { $ref: './common.schema.json#/$defs/RejectionId' }
+        election_id: { $ref: './common.schema.json#/$defs/ElectionId' }
+        event_id: { $ref: './common.schema.json#/$defs/EventId' }
+        type: { $ref: './ledger-events.schema.json#/$defs/EventType' }
+        checkpoint: { $ref: './common.schema.json#/$defs/Checkpoint', description: Checkpoint of the rejected core event (lets R3 account for every voter event up to k) }
+        reject_code: { $ref: './common.schema.json#/$defs/ProblemCode' }
+        detail: { type: string }
+        recorded_at:
+          $ref: './common.schema.json#/$defs/Timestamp'
+          description: For voter-side events this is the bucketed occurred_at of the event, never the arrival time
+        payload_hash: { $ref: './common.schema.json#/$defs/Sha256Hex' }
+        subject_hash:
+          anyOf: [ { $ref: './common.schema.json#/$defs/Sha256Hex' }, { type: 'null' } ]
+          description: token_hash (TOKEN_USED / TOKEN_REVOKED) or nullifier_hash (BALLOT_RECEIVED); null for other types
+        anchor_id: { $ref: './common.schema.json#/$defs/AnchorId', description: Anchor whose rejections_root covers this record — always present once that anchor exists (absent only before the next anchor of the election) }
+
+    MerkleProof:
+      type: object
+      required: [event_id, leaf_hash, merkle_root, path, anchor_id, tx_hash, block_number]
+      properties:
+        event_id: { $ref: './common.schema.json#/$defs/EventId' }
+        leaf_hash: { $ref: './common.schema.json#/$defs/Sha256Hex', description: 'Hc(event submission), see hashing.md' }
+        merkle_root: { $ref: './common.schema.json#/$defs/Sha256Hex' }
+        path:
+          type: array
+          items:
+            type: object
+            required: [position, hash]
+            properties:
+              position: { type: string, enum: [left, right] }
+              hash: { $ref: './common.schema.json#/$defs/Sha256Hex' }
+        anchor_id: { $ref: './common.schema.json#/$defs/AnchorId' }
+        tx_hash: { $ref: './common.schema.json#/$defs/TxHash' }
+        block_number: { type: integer, minimum: 0 }
+
+    VerifyResult:
+      type: object
+      required: [event_id, verified, checks]
+      properties:
+        event_id: { $ref: './common.schema.json#/$defs/EventId' }
+        verified: { type: boolean, description: True only if every check passed; false (never true) when not anchored yet }
+        checks:
+          type: object
+          required: [payload_hash_ok, leaf_hash_ok, merkle_proof_ok, on_chain_root_ok]
+          properties:
+            payload_hash_ok: { type: boolean }
+            leaf_hash_ok: { type: boolean }
+            merkle_proof_ok: { type: [boolean, 'null'], description: null if not anchored yet }
+            on_chain_root_ok: { type: [boolean, 'null'], description: null if not anchored yet }
+        detail: { type: string }
+
+    AnchorRecord:
+      type: object
+      required: [anchor_id, election_id, mode, merkle_root, event_count, rejections_root, tx_hash, block_number, anchored_at]
+      properties:
+        anchor_id: { $ref: './common.schema.json#/$defs/AnchorId' }
+        election_id: { $ref: './common.schema.json#/$defs/ElectionId' }
+        mode: { type: string, enum: [immediate, batched] }
+        merkle_root: { $ref: './common.schema.json#/$defs/Sha256Hex' }
+        event_count: { type: integer, minimum: 0 }
+        rejections_root: { $ref: './common.schema.json#/$defs/Sha256Hex' }
+        bucket_range:
+          type: object
+          description: Batched anchors only — min/max bucketed occurred_at of the voter events inside; the contract rejects the anchor if max + time_bucket_seconds > effective window end
+          required: [min, max]
+          properties:
+            min: { $ref: './common.schema.json#/$defs/Timestamp' }
+            max: { $ref: './common.schema.json#/$defs/Timestamp' }
+        tx_hash: { $ref: './common.schema.json#/$defs/TxHash' }
+        block_number: { type: integer, minimum: 0 }
+        anchored_at:
+          $ref: './common.schema.json#/$defs/Timestamp'
+          description: Block time. For batched anchors this reveals only when the batch closed, not individual events
+
+    ProposalStatus:
+      type: string
+      enum: [PENDING, APPROVED, REJECTED, EXPIRED]
+
+    ProposalCreate:
+      type: object
+      additionalProperties: false
+      required: [proposal_id, action_id, election_id, action_type, target_hash, requested_by_org, requested_by_user, signature]
+      properties:
+        proposal_id: { $ref: './common.schema.json#/$defs/ProposalId' }
+        action_id: { $ref: './common.schema.json#/$defs/ActionId' }
+        election_id: { $ref: './common.schema.json#/$defs/ElectionId' }
+        action_type: { $ref: './common.schema.json#/$defs/AdminActionType' }
+        target_hash: { $ref: './common.schema.json#/$defs/Sha256Hex' }
+        requested_by_org: { $ref: './common.schema.json#/$defs/OrgId' }
+        requested_by_user: { $ref: './common.schema.json#/$defs/UserId' }
+        signature: { $ref: './common.schema.json#/$defs/Signature' }
+
+    Proposal:
+      type: object
+      required: [proposal_id, action_id, election_id, action_type, target_hash, requested_by_org, request_signature, threshold, decisions, status, created_at, expires_at]
+      properties:
+        proposal_id: { $ref: './common.schema.json#/$defs/ProposalId' }
+        action_id: { $ref: './common.schema.json#/$defs/ActionId' }
+        election_id: { $ref: './common.schema.json#/$defs/ElectionId' }
+        action_type: { $ref: './common.schema.json#/$defs/AdminActionType' }
+        target_hash: { $ref: './common.schema.json#/$defs/Sha256Hex' }
+        requested_by_org: { $ref: './common.schema.json#/$defs/OrgId' }
+        request_signature: { $ref: './common.schema.json#/$defs/Signature' }
+        threshold: { $ref: './common.schema.json#/$defs/ApprovalThreshold' }
+        executed: { type: boolean, description: True once ADMIN_ACTION_EXECUTED was accepted; a second execution is rejected (ALREADY_EXECUTED) }
+        decisions:
+          type: array
+          items:
+            type: object
+            required: [org_id, decision, signature, decided_at, tx_hash, event_id]
+            properties:
+              org_id: { $ref: './common.schema.json#/$defs/OrgId' }
+              decision: { type: string, enum: [APPROVE, REJECT] }
+              signature: { $ref: './common.schema.json#/$defs/Signature' }
+              decided_at: { $ref: './common.schema.json#/$defs/Timestamp' }
+              tx_hash: { $ref: './common.schema.json#/$defs/TxHash' }
+              event_id: { $ref: './common.schema.json#/$defs/SystemEventId' }
+        status: { $ref: '#/components/schemas/ProposalStatus' }
+        created_at: { $ref: './common.schema.json#/$defs/Timestamp' }
+        expires_at: { $ref: './common.schema.json#/$defs/Timestamp' }
+
+    ElectionChainState:
+      type: object
+      required: [election_id, status, window_start, window_end, time_bucket_seconds, checkpoint_interval_seconds, config_hash, roster_hash, token_set_root, result_hash, approval_threshold, operator_org, organizations, proposal_ttl_hours, last_core_seq, block_number]
+      description: Read from the contract's electionState and electionGovernance getters (chain-interface.md); checkpoint_interval_seconds, approval_threshold, organizations, operator_org and proposal_ttl_hours come from electionGovernance. Convenience view only — Core's creation check and R5 read the node directly.
+      properties:
+        election_id: { $ref: './common.schema.json#/$defs/ElectionId' }
+        status: { $ref: './common.schema.json#/$defs/ElectionStatus' }
+        window_start: { $ref: './common.schema.json#/$defs/Timestamp' }
+        window_end: { $ref: './common.schema.json#/$defs/Timestamp', description: Effective end (after WINDOW_CHANGED / early close) }
+        time_bucket_seconds: { type: integer, minimum: 1 }
+        config_hash: { $ref: './common.schema.json#/$defs/Sha256Hex' }
+        checkpoint_interval_seconds: { type: integer, minimum: 30 }
+        roster_hash: { $ref: './common.schema.json#/$defs/Sha256Hex', description: '64 zeros while unset' }
+        token_set_root: { $ref: './common.schema.json#/$defs/Sha256Hex', description: '64 zeros while unset' }
+        last_checkpoint: { $ref: './common.schema.json#/$defs/Checkpoint' }
+        result_hash: { $ref: './common.schema.json#/$defs/Sha256Hex', description: '64 zeros while unset' }
+        approval_threshold: { $ref: './common.schema.json#/$defs/ApprovalThreshold' }
+        operator_org: { $ref: './common.schema.json#/$defs/OrgId' }
+        organizations: { $ref: './common.schema.json#/$defs/Organizations' }
+        proposal_ttl_hours: { type: integer, minimum: 1, maximum: 168 }
+        last_core_seq: { type: integer, minimum: 0 }
+        block_number: { type: integer, minimum: 0 }
+
+    NodeStatus:
+      type: object
+      required: [node_id, org_id, reachable]
+      properties:
+        node_id: { type: string }
+        org_id: { $ref: './common.schema.json#/$defs/OrgId' }
+        reachable: { type: boolean }
+        rpc_url: { type: string, description: 'JSON-RPC endpoint of the node, for information and comparison only; independent readers use the pinned chain configuration (chain-interface.md)' }
+        block_number: { type: integer, minimum: 0 }
+        peer_count: { type: integer, minimum: 0 }

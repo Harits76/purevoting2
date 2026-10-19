@@ -1,0 +1,25 @@
+{
+  "event_id": "evr_CS16CPQ7NC4Y612Y9CB7DBAJ63",
+  "schema_version": "1",
+  "election_id": "elc_WXWCBYB6WK952SWA0432CF1XMW",
+  "type": "TOKEN_USED",
+  "source": "core",
+  "checkpoint": 2,
+  "occurred_at": "2026-11-03T09:00:00Z",
+  "time_precision": "exact",
+  "actor": {
+    "kind": "voter_anonymous"
+  },
+  "payload": {
+    "token_hash": "65d01b54c870182ca3365564dbc7677a196f72a52f1ec15fdbf2da5efd013345"
+  },
+  "payload_hash": "a15db23a37c7bf7d6f863f385c18aca8a0bbf746cbee46029f3870e0eed1ce90",
+  "anchor": {
+    "status": "ANCHORED",
+    "anchor_id": "anc_1RTADDD8EPBMMCDC68F85GR6VT",
+    "mode": "batched",
+    "merkle_root": "55333ccd71ef825b336173b455609acbf5af578788d017200a79a27aa47f8639",
+    "tx_hash": "0x60e4d520e9daee926a738fde5be3edd34ad9fa7e269682c8f2b1b8db268af7ce",
+    "block_number": 3268
+  }
+}

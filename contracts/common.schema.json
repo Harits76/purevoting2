@@ -1,0 +1,550 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://purevoting2.local/contracts/common.schema.json",
+  "title": "Shared definitions",
+  "$defs": {
+    "Ulid": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "ElectionId": {
+      "type": "string",
+      "pattern": "^elc_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "CandidateId": {
+      "type": "string",
+      "pattern": "^cand_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "VoterKey": {
+      "type": "string",
+      "pattern": "^vtr_[0-9A-HJKMNP-TV-Z]{26}$",
+      "description": "Random, non-PII voter key. 26 chars MUST be random (not a ULID timestamp)."
+    },
+    "EventId": {
+      "type": "string",
+      "pattern": "^ev[tr]_[0-9A-HJKMNP-TV-Z]{26}$",
+      "description": "evt_ = ULID (system/admin events). evr_ = 26 random chars, used ONLY for voter-side events (TOKEN_USED, BALLOT_RECEIVED) so the ID carries no timestamp."
+    },
+    "SystemEventId": {
+      "type": "string",
+      "pattern": "^evt_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "VoterEventId": {
+      "type": "string",
+      "pattern": "^evr_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "ActionId": {
+      "type": "string",
+      "pattern": "^act_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "ProposalId": {
+      "type": "string",
+      "pattern": "^prp_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "AnchorId": {
+      "type": "string",
+      "pattern": "^anc_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "FindingId": {
+      "type": "string",
+      "pattern": "^fnd_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "ReportId": {
+      "type": "string",
+      "pattern": "^rpt_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "RunRequestId": {
+      "type": "string",
+      "pattern": "^run_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "RejectionId": {
+      "type": "string",
+      "pattern": "^rej_[0-9A-HJKMNP-TV-Z]{26}$",
+      "description": "Random 26 chars (not ULID) because rejections can concern voter-side events"
+    },
+    "AttemptId": {
+      "type": "string",
+      "pattern": "^att_[0-9A-HJKMNP-TV-Z]{26}$",
+      "description": "Random 26 chars (not ULID)"
+    },
+    "OrgId": {
+      "type": "string",
+      "pattern": "^org_[a-z0-9_]{2,32}$",
+      "examples": [
+        "org_commission",
+        "org_observer",
+        "org_neutral"
+      ]
+    },
+    "UserId": {
+      "type": "string",
+      "pattern": "^usr_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "Checkpoint": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Per-election checkpoint number (see contracts/README.md#checkpoints)"
+    },
+    "Timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+      "description": "RFC 3339, UTC, whole seconds only (canonical text for hashing)"
+    },
+    "Sha256Hex": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "TxHash": {
+      "type": "string",
+      "pattern": "^0x[0-9a-f]{64}$"
+    },
+    "Base64Url128": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{22}$",
+      "description": "128-bit random value, base64url, no padding"
+    },
+    "Signature": {
+      "type": "object",
+      "description": "An organization's signature over a 32-byte digest defined in contracts/hashing.md",
+      "additionalProperties": false,
+      "required": [
+        "scheme",
+        "signer",
+        "value"
+      ],
+      "properties": {
+        "scheme": {
+          "type": "string",
+          "enum": [
+            "eip191-secp256k1",
+            "ed25519"
+          ],
+          "description": "Fixed per deployment by D-02 / D-11"
+        },
+        "signer": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 132,
+          "description": "Address (0x..) or public key; must equal the organization's key in the on-chain organization registry"
+        },
+        "value": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "eip191-secp256k1: 0x + 130 hex (r||s||v); ed25519: 86-char base64url (64 bytes). Encoding rules: hashing.md#signatures"
+        }
+      }
+    },
+    "Organization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "org_id",
+        "signer"
+      ],
+      "properties": {
+        "org_id": {
+          "$ref": "#/$defs/OrgId"
+        },
+        "signer": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 132,
+          "description": "Signing key of this organization as found in the on-chain organization registry (GET /v1/organizations). Registered by that organization's own node account at network setup — never supplied by the election commission. The private key is held by that organization."
+        }
+      }
+    },
+    "Organizations": {
+      "type": "array",
+      "minItems": 3,
+      "items": {
+        "$ref": "#/$defs/Organization"
+      },
+      "description": "Sorted by org_id, org_id unique (checked by Core, the contract and the validator)"
+    },
+    "ApprovalThreshold": {
+      "type": "integer",
+      "minimum": 2,
+      "description": "Approvals required from organizations other than the requester. Must also be <= number of organizations - 1 (checked by Core, the contract and the validator)."
+    },
+    "ElectionStatus": {
+      "type": "string",
+      "enum": [
+        "DRAFT",
+        "ROSTER_FROZEN",
+        "OPEN",
+        "CLOSED",
+        "TALLIED",
+        "FINALIZED",
+        "VOIDED"
+      ],
+      "description": "Allowed transitions: see contracts/README.md#election-state-machine"
+    },
+    "AdminActionType": {
+      "type": "string",
+      "enum": [
+        "ROSTER_AMEND",
+        "TOKEN_REISSUE",
+        "WINDOW_CHANGE",
+        "ELECTION_CLOSE_EARLY",
+        "ELECTION_VOID"
+      ],
+      "description": "Privileged actions that require multi-organization approval (D-11). There is deliberately no action that re-enables a USED token (D-09). ELECTION_VOID is the only exit when a finding is CONFIRMED_ISSUE."
+    },
+    "AdminActionStatus": {
+      "type": "string",
+      "enum": [
+        "AWAITING_SIGNATURE",
+        "PENDING_APPROVAL",
+        "APPROVED",
+        "REJECTED",
+        "EXPIRED",
+        "EXECUTED",
+        "FAILED"
+      ]
+    },
+    "RuleId": {
+      "type": "string",
+      "enum": [
+        "R1",
+        "R2",
+        "R3",
+        "R4",
+        "R5"
+      ]
+    },
+    "RuleResult": {
+      "type": "string",
+      "enum": [
+        "PASS",
+        "FAIL",
+        "INCONCLUSIVE"
+      ]
+    },
+    "CauseCode": {
+      "type": "string",
+      "enum": [
+        "PROCESSING_BUG",
+        "SYSTEM_FAILURE",
+        "LEDGER_SYNC_DELAY",
+        "CLOCK_SKEW",
+        "CONFIG_ERROR",
+        "UNAUTHORIZED_ADMIN_ACTION",
+        "DATA_TAMPERING",
+        "FALSE_POSITIVE",
+        "UNKNOWN"
+      ]
+    },
+    "ViewName": {
+      "type": "string",
+      "enum": [
+        "election_config",
+        "roster",
+        "token_status",
+        "credential_issuance",
+        "ballot_receipts",
+        "admin_actions",
+        "rejected_attempts"
+      ]
+    },
+    "SnapshotTable": {
+      "type": "string",
+      "enum": [
+        "roster",
+        "token_status",
+        "credential_issuance",
+        "ballot_receipts",
+        "admin_actions",
+        "rejected_attempts"
+      ]
+    },
+    "ServiceName": {
+      "type": "string",
+      "enum": [
+        "core-api",
+        "outbox-worker",
+        "ledger-gateway",
+        "rule-engine",
+        "audit-agent"
+      ],
+      "description": "Log sources. audit-agent logs are never valid evidence for the agent's own reports. Log lines never contain receipt_hash either."
+    },
+    "EvidenceRef": {
+      "type": "object",
+      "description": "Pointer to evidence that Core can re-fetch. ref formats are fixed per kind (contracts/README.md#evidence-references).",
+      "required": [
+        "kind",
+        "ref"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "ledger_event",
+            "ledger_rejection",
+            "anchor",
+            "proposal",
+            "view_row",
+            "snapshot",
+            "service_log",
+            "finding"
+          ]
+        },
+        "ref": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "note": {
+          "type": "string",
+          "maxLength": 500
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "ledger_event"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "ref": {
+                "$ref": "#/$defs/EventId"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "ledger_rejection"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "ref": {
+                "$ref": "#/$defs/RejectionId"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "anchor"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "ref": {
+                "$ref": "#/$defs/AnchorId"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "proposal"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "ref": {
+                "$ref": "#/$defs/ProposalId"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "finding"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "ref": {
+                "$ref": "#/$defs/FindingId"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "view_row"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "ref": {
+                "pattern": "^(election_config:config|roster:vtr_[0-9A-HJKMNP-TV-Z]{26}|token_status:[0-9a-f]{64}|credential_issuance:[0-9a-f]{64}|ballot_receipts:[0-9a-f]{64}|admin_actions:act_[0-9A-HJKMNP-TV-Z]{26}|rejected_attempts:att_[0-9A-HJKMNP-TV-Z]{26})@[0-9]+$"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "snapshot"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "ref": {
+                "pattern": "^(roster|token_status|credential_issuance|ballot_receipts|admin_actions|rejected_attempts)@[0-9]+$"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "service_log"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "ref": {
+                "pattern": "^(core-api|outbox-worker|ledger-gateway|rule-engine):[A-Za-z0-9_-]{1,64}$"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "Problem": {
+      "type": "object",
+      "description": "RFC 9457 problem details",
+      "required": [
+        "type",
+        "title",
+        "status",
+        "code"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "format": "uri-reference"
+        },
+        "title": {
+          "type": "string"
+        },
+        "status": {
+          "type": "integer",
+          "minimum": 400,
+          "maximum": 599
+        },
+        "code": {
+          "$ref": "#/$defs/ProblemCode"
+        },
+        "detail": {
+          "type": "string"
+        },
+        "instance": {
+          "type": "string"
+        }
+      }
+    },
+    "ProblemCode": {
+      "type": "string",
+      "enum": [
+        "VALIDATION_ERROR",
+        "UNAUTHORIZED",
+        "FORBIDDEN",
+        "NOT_FOUND",
+        "CONFLICT",
+        "RATE_LIMITED",
+        "INVALID_STATE_TRANSITION",
+        "ELECTION_NOT_OPEN",
+        "ROSTER_FROZEN",
+        "TOKEN_INVALID",
+        "TOKEN_ALREADY_USED",
+        "CREDENTIAL_UNKNOWN",
+        "CREDENTIAL_ALREADY_USED",
+        "NULLIFIER_ALREADY_REGISTERED",
+        "TOKEN_REVOKED",
+        "ORG_NOT_REGISTERED",
+        "OUTBOX_NOT_DRAINED",
+        "FINDINGS_UNREVIEWED",
+        "APPROVAL_REQUIRED",
+        "SELF_APPROVAL_NOT_ALLOWED",
+        "SIGNATURE_INVALID",
+        "AUDIT_UNRESOLVED",
+        "CHECKPOINT_NOT_FOUND",
+        "DUPLICATE_CONTENT",
+        "SEQUENCE_GAP",
+        "LEDGER_REJECTED",
+        "LEDGER_UNAVAILABLE",
+        "EVIDENCE_NOT_FOUND",
+        "ALREADY_EXECUTED",
+        "FINDING_NOT_RECORDED",
+        "BUCKET_TOO_SMALL",
+        "TIME_NOT_REACHED",
+        "INTERNAL_ERROR"
+      ]
+    },
+    "FindingReviewDecision": {
+      "type": "string",
+      "enum": [
+        "DISMISSED",
+        "ACCEPTED_RISK",
+        "CONFIRMED_ISSUE"
+      ],
+      "description": "DISMISSED = false alarm; ACCEPTED_RISK = real but documented and judged not to affect the result; CONFIRMED_ISSUE = real problem (blocks finalization)"
+    },
+    "SubmittedVia": {
+      "type": "string",
+      "enum": [
+        "gateway",
+        "chain"
+      ],
+      "description": "gateway = relayed by Core/Gateway; chain = sent directly to the contract by the signer (chain-interface.md)"
+    },
+    "NoFloat": {
+      "description": "Any JSON value without non-integer numbers (hashed objects must be float-free, hashing.md)",
+      "anyOf": [
+        {
+          "type": [
+            "string",
+            "boolean",
+            "null",
+            "integer"
+          ]
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/NoFloat"
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/NoFloat"
+          }
+        }
+      ]
+    }
+  }
+}

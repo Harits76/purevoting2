@@ -1,0 +1,40 @@
+{
+  "event_id": "evt_WDWVGR9Q9MJBVQ6XM55VZXK04K",
+  "schema_version": "1",
+  "election_id": "elc_WXWCBYB6WK952SWA0432CF1XMW",
+  "type": "APPROVAL_RECORDED",
+  "source": "gateway",
+  "seq": 3,
+  "checkpoint": 3,
+  "occurred_at": "2026-11-03T09:25:40Z",
+  "time_precision": "exact",
+  "actor": {
+    "kind": "approver",
+    "org_id": "org_observer",
+    "user_id": "usr_C230HGV126EH45AFQYYPDNNZ84"
+  },
+  "payload": {
+    "action_id": "act_2GFSGTZJB48EY4HDD14HTWF32B",
+    "proposal_id": "prp_JQ85Q8WN821YPK214Y4KM844WQ",
+    "org_id": "org_observer",
+    "decision": "APPROVE",
+    "signature": {
+      "scheme": "eip191-secp256k1",
+      "signer": "0xb2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+      "value": "0x2fb22429ca228b43c0f7fdc280e8302fa2ccf32b849a8f1832b6894095304ba12fb22429ca228b43c0f7fdc280e8302fa2ccf32b849a8f1832b6894095304ba11b"
+    },
+    "approvals_so_far": 1,
+    "threshold": 2,
+    "submitted_via": "gateway"
+  },
+  "payload_hash": "167b7cf704150ecf87bcff0284eeb506504ac58cea5818b2c6147f7d1b1502ad",
+  "received_at": "2026-11-03T09:25:42Z",
+  "anchor": {
+    "status": "ANCHORED",
+    "anchor_id": "anc_D5KZMJ9EPMQ7MWHWKXMESF5QQ1",
+    "mode": "immediate",
+    "merkle_root": "a1e2b1887fd0255c6877f4673956b84c656fe96464ffc3538f31f0b7fe82be85",
+    "tx_hash": "0xaff6c73f5195f701b612843ce115575e5b97e587b54ce5eceb78a289980aa455",
+    "block_number": 3574
+  }
+}

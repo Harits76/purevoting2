@@ -1,0 +1,30 @@
+{
+  "event_id": "evt_CHEGEF0S0FZ5NGP61MDSACAANZ",
+  "schema_version": "1",
+  "election_id": "elc_WXWCBYB6WK952SWA0432CF1XMW",
+  "type": "ADMIN_ACTION_FAILED",
+  "source": "core",
+  "seq": 14,
+  "checkpoint": 10,
+  "occurred_at": "2026-11-03T11:02:00Z",
+  "time_precision": "exact",
+  "actor": {
+    "kind": "system"
+  },
+  "payload": {
+    "action_id": "act_YGK1S7Q4SH3RZKYMG412PMQKGB",
+    "proposal_id": "prp_YRNQ1D43TT4H4XWRR28HKZQY19",
+    "action_type": "WINDOW_CHANGE",
+    "reason_code": "INVALID_STATE_TRANSITION"
+  },
+  "payload_hash": "5946351219840c793728746f9adee807aa8cba7b367d853f49eb723995f25214",
+  "received_at": "2026-11-03T11:15:02Z",
+  "anchor": {
+    "status": "ANCHORED",
+    "anchor_id": "anc_JQTJQZFFQMB8446K7WY2ATY3PG",
+    "mode": "immediate",
+    "merkle_root": "713b4f134a48124087b655cd5bdf7fd9bbe7ba51130c2a2e5097c4274ece02ee",
+    "tx_hash": "0x0f84333059ee69f1a931c1af172b89441f7de237372e54ea1b237596d95f2d4b",
+    "block_number": 6854
+  }
+}

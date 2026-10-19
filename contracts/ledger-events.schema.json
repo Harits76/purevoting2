@@ -1,0 +1,1498 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://purevoting2.local/contracts/ledger-events.schema.json",
+  "title": "LedgerEvent",
+  "description": "An audit event as stored by the Ledger Gateway. Core API submits LedgerEventSubmission; the Gateway adds received_at (system events only) and anchor. Never contains PII, raw tokens or raw credentials. Voter-side events (TOKEN_USED, BALLOT_RECEIVED) carry no precise time anywhere: random evr_ ID, bucketed occurred_at, no received_at, no seq.",
+  "$ref": "#/$defs/LedgerEvent",
+  "$defs": {
+    "EventType": {
+      "type": "string",
+      "enum": [
+        "ELECTION_CREATED",
+        "ROSTER_FROZEN",
+        "ROSTER_AMENDED",
+        "TOKEN_BATCH_ISSUED",
+        "TOKEN_REVOKED",
+        "TOKEN_USED",
+        "BALLOT_RECEIVED",
+        "ADMIN_ACTION_REQUESTED",
+        "APPROVAL_RECORDED",
+        "PROPOSAL_CLOSED",
+        "ADMIN_ACTION_EXECUTED",
+        "ADMIN_ACTION_FAILED",
+        "ELECTION_OPENED",
+        "ELECTION_CLOSED",
+        "WINDOW_CHANGED",
+        "CHECKPOINT_COMMITTED",
+        "FINDING_RECORDED",
+        "FINDING_REVIEWED",
+        "TALLY_PUBLISHED",
+        "ELECTION_FINALIZED",
+        "ELECTION_VOIDED"
+      ]
+    },
+    "VoterEventType": {
+      "enum": [
+        "TOKEN_USED",
+        "BALLOT_RECEIVED"
+      ]
+    },
+    "GatewayEventType": {
+      "enum": [
+        "ADMIN_ACTION_REQUESTED",
+        "APPROVAL_RECORDED",
+        "PROPOSAL_CLOSED",
+        "FINDING_RECORDED",
+        "FINDING_REVIEWED"
+      ]
+    },
+    "Actor": {
+      "type": "object",
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "system",
+            "admin",
+            "approver",
+            "voter_anonymous"
+          ]
+        },
+        "org_id": {
+          "$ref": "common.schema.json#/$defs/OrgId"
+        },
+        "user_id": {
+          "$ref": "common.schema.json#/$defs/UserId",
+          "description": "Present for staff actions through Core; absent for organization signatures submitted directly on chain"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "voter_anonymous",
+                  "system"
+                ]
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "user_id"
+                  ]
+                },
+                {
+                  "required": [
+                    "org_id"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "admin"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "org_id",
+              "user_id"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "approver"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "org_id"
+            ]
+          }
+        }
+      ]
+    },
+    "Anchor": {
+      "type": "object",
+      "description": "Where this event is committed on chain (D-04)",
+      "required": [
+        "status"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "PENDING",
+            "ANCHORED"
+          ]
+        },
+        "anchor_id": {
+          "$ref": "common.schema.json#/$defs/AnchorId"
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "immediate",
+            "batched"
+          ]
+        },
+        "merkle_root": {
+          "$ref": "common.schema.json#/$defs/Sha256Hex"
+        },
+        "tx_hash": {
+          "$ref": "common.schema.json#/$defs/TxHash"
+        },
+        "block_number": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "ANCHORED"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "anchor_id",
+              "mode",
+              "merkle_root",
+              "tx_hash",
+              "block_number"
+            ]
+          }
+        }
+      ]
+    },
+    "LedgerEventInput": {
+      "type": "object",
+      "required": [
+        "event_id",
+        "schema_version",
+        "election_id",
+        "type",
+        "source",
+        "checkpoint",
+        "occurred_at",
+        "time_precision",
+        "actor",
+        "payload",
+        "payload_hash"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "common.schema.json#/$defs/EventId"
+        },
+        "schema_version": {
+          "const": "1"
+        },
+        "election_id": {
+          "$ref": "common.schema.json#/$defs/ElectionId"
+        },
+        "type": {
+          "$ref": "#/$defs/EventType"
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "core",
+            "gateway"
+          ],
+          "description": "gateway only for ADMIN_ACTION_REQUESTED, APPROVAL_RECORDED, PROPOSAL_CLOSED, FINDING_RECORDED, FINDING_REVIEWED"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Gap-free sequence per (election_id, source) for system events, assigned by the source. A REJECTED system event still consumes its seq (the Gateway records the rejection and advances). Forbidden on voter-side events."
+        },
+        "checkpoint": {
+          "$ref": "common.schema.json#/$defs/Checkpoint",
+          "description": "Core events: Core's open checkpoint when created. Gateway events: last committed checkpoint applied at the Gateway + 1. Lets every rule run for checkpoint k filter all events with checkpoint <= k reproducibly."
+        },
+        "occurred_at": {
+          "$ref": "common.schema.json#/$defs/Timestamp",
+          "description": "Official time: when Core (or the Gateway for gateway events) accepted the action. For voter-side events: floor(t / time_bucket_seconds) * time_bucket_seconds"
+        },
+        "time_precision": {
+          "type": "string",
+          "enum": [
+            "exact",
+            "bucketed"
+          ]
+        },
+        "time_bucket_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Bucket size; equals ELECTION_CREATED.time_bucket_seconds. Only on bucketed events."
+        },
+        "actor": {
+          "$ref": "#/$defs/Actor"
+        },
+        "payload": {
+          "type": "object"
+        },
+        "payload_hash": {
+          "$ref": "common.schema.json#/$defs/Sha256Hex",
+          "description": "Hc(payload), see hashing.md"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "$ref": "#/$defs/VoterEventType"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "checkpoint",
+              "time_bucket_seconds"
+            ],
+            "properties": {
+              "event_id": {
+                "$ref": "common.schema.json#/$defs/VoterEventId"
+              },
+              "source": {
+                "const": "core"
+              },
+              "time_precision": {
+                "const": "bucketed"
+              },
+              "actor": {
+                "properties": {
+                  "kind": {
+                    "const": "voter_anonymous"
+                  }
+                }
+              }
+            },
+            "not": {
+              "required": [
+                "seq"
+              ]
+            }
+          },
+          "else": {
+            "required": [
+              "seq"
+            ],
+            "properties": {
+              "event_id": {
+                "$ref": "common.schema.json#/$defs/SystemEventId"
+              },
+              "time_precision": {
+                "const": "exact"
+              },
+              "actor": {
+                "properties": {
+                  "kind": {
+                    "not": {
+                      "const": "voter_anonymous"
+                    }
+                  }
+                }
+              }
+            },
+            "not": {
+              "required": [
+                "time_bucket_seconds"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "$ref": "#/$defs/GatewayEventType"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "source": {
+                "const": "gateway"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "source": {
+                "const": "core"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "ELECTION_CREATED"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "$ref": "#/$defs/payloads/ELECTION_CREATED"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "ROSTER_FROZEN"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "$ref": "#/$defs/payloads/ROSTER_FROZEN"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "ROSTER_AMENDED"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "$ref": "#/$defs/payloads/ROSTER_AMENDED"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "TOKEN_BATCH_ISSUED"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "$ref": "#/$defs/payloads/TOKEN_BATCH_ISSUED"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "TOKEN_REVOKED"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "$ref": "#/$defs/payloads/TOKEN_REVOKED"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "TOKEN_USED"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "$ref": "#/$defs/payloads/TOKEN_USED"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "BALLOT_RECEIVED"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "$ref": "#/$defs/payloads/BALLOT_RECEIVED"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "ADMIN_ACTION_REQUESTED"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "$ref": "#/$defs/payloads/ADMIN_ACTION_REQUESTED"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "APPROVAL_RECORDED"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "$ref": "#/$defs/payloads/APPROVAL_RECORDED"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "PROPOSAL_CLOSED"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "$ref": "#/$defs/payloads/PROPOSAL_CLOSED"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "ADMIN_ACTION_EXECUTED"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "$ref": "#/$defs/payloads/ADMIN_ACTION_EXECUTED"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "ADMIN_ACTION_FAILED"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "$ref": "#/$defs/payloads/ADMIN_ACTION_FAILED"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "ELECTION_OPENED"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "$ref": "#/$defs/payloads/ELECTION_OPENED"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "ELECTION_CLOSED"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "$ref": "#/$defs/payloads/ELECTION_CLOSED"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "WINDOW_CHANGED"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "$ref": "#/$defs/payloads/WINDOW_CHANGED"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "CHECKPOINT_COMMITTED"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "$ref": "#/$defs/payloads/CHECKPOINT_COMMITTED"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "TALLY_PUBLISHED"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "$ref": "#/$defs/payloads/TALLY_PUBLISHED"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "ELECTION_FINALIZED"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "$ref": "#/$defs/payloads/ELECTION_FINALIZED"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "FINDING_RECORDED"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "$ref": "#/$defs/payloads/FINDING_RECORDED"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "FINDING_REVIEWED"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "$ref": "#/$defs/payloads/FINDING_REVIEWED"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "ELECTION_VOIDED"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "$ref": "#/$defs/payloads/ELECTION_VOIDED"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "LedgerEventSubmission": {
+      "description": "What Core API sends in POST /v1/events (no extra fields allowed). Also the exact object whose Hc() is the Merkle leaf.",
+      "allOf": [
+        {
+          "$ref": "#/$defs/LedgerEventInput"
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "LedgerEvent": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/LedgerEventInput"
+        },
+        {
+          "type": "object",
+          "required": [
+            "anchor"
+          ],
+          "properties": {
+            "received_at": {
+              "$ref": "common.schema.json#/$defs/Timestamp",
+              "description": "System events only. The Gateway MUST NOT store or expose a precise receive time for voter-side events."
+            },
+            "anchor": {
+              "$ref": "#/$defs/Anchor"
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "$ref": "#/$defs/VoterEventType"
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "required": [
+                "received_at"
+              ]
+            }
+          },
+          "else": {
+            "required": [
+              "received_at"
+            ]
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "payloads": {
+      "ELECTION_CREATED": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "config_hash",
+          "window_start",
+          "window_end",
+          "time_bucket_seconds",
+          "checkpoint_interval_seconds",
+          "candidate_count",
+          "organizations",
+          "approval_threshold",
+          "public_key_hash",
+          "proposal_ttl_hours",
+          "operator_org"
+        ],
+        "properties": {
+          "config_hash": {
+            "$ref": "common.schema.json#/$defs/Sha256Hex"
+          },
+          "window_start": {
+            "$ref": "common.schema.json#/$defs/Timestamp",
+            "description": "Aligned to time_bucket_seconds"
+          },
+          "window_end": {
+            "$ref": "common.schema.json#/$defs/Timestamp",
+            "description": "Aligned to time_bucket_seconds"
+          },
+          "time_bucket_seconds": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "candidate_count": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "organizations": {
+            "$ref": "common.schema.json#/$defs/Organizations"
+          },
+          "approval_threshold": {
+            "$ref": "common.schema.json#/$defs/ApprovalThreshold"
+          },
+          "public_key_hash": {
+            "$ref": "common.schema.json#/$defs/Sha256Hex"
+          },
+          "proposal_ttl_hours": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 168,
+            "description": "Proposal expiry; part of config_hash"
+          },
+          "operator_org": {
+            "$ref": "common.schema.json#/$defs/OrgId",
+            "description": "Must equal the operator organization recorded in the on-chain registry (confirmed by every registered organization at network setup); the contract rejects the election otherwise. Never taken from a staff login."
+          },
+          "checkpoint_interval_seconds": {
+            "type": "integer",
+            "minimum": 30,
+            "description": "Periodic checkpoint interval; must be an integer multiple of time_bucket_seconds (checkpoint numbers must not be finer than buckets). Part of config_hash."
+          }
+        }
+      },
+      "ROSTER_FROZEN": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "roster_hash",
+          "voter_count"
+        ],
+        "properties": {
+          "roster_hash": {
+            "$ref": "common.schema.json#/$defs/Sha256Hex"
+          },
+          "voter_count": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "ROSTER_AMENDED": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "action_id",
+          "proposal_id",
+          "roster_hash_before",
+          "roster_hash_after",
+          "voter_count",
+          "added",
+          "removed"
+        ],
+        "properties": {
+          "action_id": {
+            "$ref": "common.schema.json#/$defs/ActionId"
+          },
+          "proposal_id": {
+            "$ref": "common.schema.json#/$defs/ProposalId"
+          },
+          "roster_hash_before": {
+            "$ref": "common.schema.json#/$defs/Sha256Hex"
+          },
+          "roster_hash_after": {
+            "$ref": "common.schema.json#/$defs/Sha256Hex"
+          },
+          "voter_count": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "added": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "removed": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "TOKEN_BATCH_ISSUED": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "batch_no",
+          "token_count",
+          "token_set_root"
+        ],
+        "properties": {
+          "batch_no": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "token_count": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Tokens issued in this batch"
+          },
+          "token_set_root": {
+            "$ref": "common.schema.json#/$defs/Sha256Hex",
+            "description": "set_root of all non-revoked token hashes after this batch"
+          }
+        }
+      },
+      "TOKEN_REVOKED": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "action_id",
+          "proposal_id",
+          "voter_key",
+          "token_hash",
+          "reason",
+          "token_set_root"
+        ],
+        "properties": {
+          "action_id": {
+            "$ref": "common.schema.json#/$defs/ActionId"
+          },
+          "proposal_id": {
+            "$ref": "common.schema.json#/$defs/ProposalId"
+          },
+          "token_hash": {
+            "$ref": "common.schema.json#/$defs/Sha256Hex",
+            "description": "Only UNUSED tokens can be revoked: Core re-checks atomically at execution time and the Gateway rejects TOKEN_REVOKED for a token_hash with an accepted TOKEN_USED"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "VOTER_REMOVED",
+              "REISSUE"
+            ]
+          },
+          "token_set_root": {
+            "$ref": "common.schema.json#/$defs/Sha256Hex"
+          },
+          "voter_key": {
+            "$ref": "common.schema.json#/$defs/VoterKey",
+            "description": "Voter whose UNUSED token is revoked (lets R4 match the approved target). Revealing it is harmless because the token was never used."
+          }
+        }
+      },
+      "TOKEN_USED": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "token_hash"
+        ],
+        "properties": {
+          "token_hash": {
+            "$ref": "common.schema.json#/$defs/Sha256Hex"
+          }
+        }
+      },
+      "BALLOT_RECEIVED": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "nullifier_hash",
+          "ballot_hash",
+          "receipt_hash"
+        ],
+        "properties": {
+          "nullifier_hash": {
+            "$ref": "common.schema.json#/$defs/Sha256Hex"
+          },
+          "ballot_hash": {
+            "$ref": "common.schema.json#/$defs/Sha256Hex"
+          },
+          "receipt_hash": {
+            "$ref": "common.schema.json#/$defs/Sha256Hex"
+          }
+        }
+      },
+      "ADMIN_ACTION_REQUESTED": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "action_id",
+          "proposal_id",
+          "action_type",
+          "target_hash",
+          "requested_by_org",
+          "signature",
+          "threshold",
+          "expires_at"
+        ],
+        "properties": {
+          "action_id": {
+            "$ref": "common.schema.json#/$defs/ActionId"
+          },
+          "proposal_id": {
+            "$ref": "common.schema.json#/$defs/ProposalId"
+          },
+          "action_type": {
+            "$ref": "common.schema.json#/$defs/AdminActionType"
+          },
+          "target_hash": {
+            "$ref": "common.schema.json#/$defs/Sha256Hex"
+          },
+          "requested_by_org": {
+            "$ref": "common.schema.json#/$defs/OrgId"
+          },
+          "signature": {
+            "$ref": "common.schema.json#/$defs/Signature",
+            "description": "Requesting org's signature over the request digest"
+          },
+          "threshold": {
+            "$ref": "common.schema.json#/$defs/ApprovalThreshold"
+          },
+          "expires_at": {
+            "$ref": "common.schema.json#/$defs/Timestamp"
+          }
+        }
+      },
+      "APPROVAL_RECORDED": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "action_id",
+          "proposal_id",
+          "org_id",
+          "decision",
+          "signature",
+          "approvals_so_far",
+          "threshold",
+          "submitted_via"
+        ],
+        "properties": {
+          "action_id": {
+            "$ref": "common.schema.json#/$defs/ActionId"
+          },
+          "proposal_id": {
+            "$ref": "common.schema.json#/$defs/ProposalId"
+          },
+          "org_id": {
+            "$ref": "common.schema.json#/$defs/OrgId"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "APPROVE",
+              "REJECT"
+            ]
+          },
+          "signature": {
+            "$ref": "common.schema.json#/$defs/Signature"
+          },
+          "approvals_so_far": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "threshold": {
+            "$ref": "common.schema.json#/$defs/ApprovalThreshold"
+          },
+          "submitted_via": {
+            "$ref": "common.schema.json#/$defs/SubmittedVia"
+          }
+        }
+      },
+      "PROPOSAL_CLOSED": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "action_id",
+          "proposal_id",
+          "outcome"
+        ],
+        "properties": {
+          "action_id": {
+            "$ref": "common.schema.json#/$defs/ActionId"
+          },
+          "proposal_id": {
+            "$ref": "common.schema.json#/$defs/ProposalId"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "APPROVED",
+              "REJECTED",
+              "EXPIRED"
+            ]
+          }
+        }
+      },
+      "ADMIN_ACTION_EXECUTED": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "action_id",
+          "proposal_id",
+          "action_type",
+          "target_hash"
+        ],
+        "properties": {
+          "action_id": {
+            "$ref": "common.schema.json#/$defs/ActionId"
+          },
+          "proposal_id": {
+            "$ref": "common.schema.json#/$defs/ProposalId"
+          },
+          "action_type": {
+            "$ref": "common.schema.json#/$defs/AdminActionType"
+          },
+          "target_hash": {
+            "$ref": "common.schema.json#/$defs/Sha256Hex",
+            "description": "Must equal the approved proposal's target_hash. At most one ADMIN_ACTION_EXECUTED per proposal (the contract rejects a second one: ALREADY_EXECUTED)"
+          }
+        }
+      },
+      "ADMIN_ACTION_FAILED": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "action_id",
+          "proposal_id",
+          "action_type",
+          "reason_code"
+        ],
+        "properties": {
+          "action_id": {
+            "$ref": "common.schema.json#/$defs/ActionId"
+          },
+          "proposal_id": {
+            "$ref": "common.schema.json#/$defs/ProposalId"
+          },
+          "action_type": {
+            "$ref": "common.schema.json#/$defs/AdminActionType"
+          },
+          "reason_code": {
+            "$ref": "common.schema.json#/$defs/ProblemCode"
+          }
+        }
+      },
+      "ELECTION_OPENED": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "window_start",
+          "window_end"
+        ],
+        "properties": {
+          "window_start": {
+            "$ref": "common.schema.json#/$defs/Timestamp"
+          },
+          "window_end": {
+            "$ref": "common.schema.json#/$defs/Timestamp"
+          }
+        }
+      },
+      "ELECTION_CLOSED": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "reason",
+          "closed_at"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string",
+            "enum": [
+              "SCHEDULED",
+              "EARLY"
+            ]
+          },
+          "closed_at": {
+            "$ref": "common.schema.json#/$defs/Timestamp",
+            "description": "Effective end of voting, aligned to time_bucket_seconds"
+          },
+          "action_id": {
+            "$ref": "common.schema.json#/$defs/ActionId"
+          },
+          "proposal_id": {
+            "$ref": "common.schema.json#/$defs/ProposalId"
+          },
+          "requested_closed_at": {
+            "$ref": "common.schema.json#/$defs/Timestamp",
+            "description": "EARLY only: the approved target.closed_at. Contract and R4 check closed_at == max(requested_closed_at, ceil_to_bucket(ADMIN_ACTION_EXECUTED.occurred_at))"
+          }
+        },
+        "if": {
+          "properties": {
+            "reason": {
+              "const": "EARLY"
+            }
+          }
+        },
+        "then": {
+          "required": [
+            "action_id",
+            "proposal_id",
+            "requested_closed_at"
+          ]
+        }
+      },
+      "WINDOW_CHANGED": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "action_id",
+          "proposal_id",
+          "old_window_end",
+          "new_window_end"
+        ],
+        "properties": {
+          "action_id": {
+            "$ref": "common.schema.json#/$defs/ActionId"
+          },
+          "proposal_id": {
+            "$ref": "common.schema.json#/$defs/ProposalId"
+          },
+          "old_window_end": {
+            "$ref": "common.schema.json#/$defs/Timestamp"
+          },
+          "new_window_end": {
+            "$ref": "common.schema.json#/$defs/Timestamp",
+            "description": "Aligned to time_bucket_seconds"
+          }
+        }
+      },
+      "CHECKPOINT_COMMITTED": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "checkpoint",
+          "reason",
+          "tables",
+          "counts",
+          "voter_events"
+        ],
+        "properties": {
+          "checkpoint": {
+            "$ref": "common.schema.json#/$defs/Checkpoint",
+            "description": "The checkpoint being closed. Must equal the event's own checkpoint field."
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "PERIODIC",
+              "STATE_CHANGE",
+              "CLOSE_FINAL",
+              "TALLY"
+            ]
+          },
+          "tables": {
+            "type": "array",
+            "minItems": 6,
+            "maxItems": 6,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "table",
+                "row_count",
+                "snapshot_hash"
+              ],
+              "properties": {
+                "table": {
+                  "$ref": "common.schema.json#/$defs/SnapshotTable"
+                },
+                "row_count": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "snapshot_hash": {
+                  "$ref": "common.schema.json#/$defs/Sha256Hex"
+                }
+              }
+            }
+          },
+          "counts": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "roster_active",
+              "tokens_active",
+              "token_used",
+              "credentials_issued",
+              "ballots_received",
+              "rejected_attempts"
+            ],
+            "properties": {
+              "roster_active": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "tokens_active": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Tokens not revoked (status ISSUED or USED) as of this checkpoint"
+              },
+              "token_used": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "credentials_issued": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "ballots_received": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "rejected_attempts": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "description": "Values computed from the six tables as of this checkpoint (the same data the views return for ?checkpoint=k)"
+          },
+          "voter_events": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "Defined from the views (README#checkpoints): TOKEN_USED = token_status rows with used_checkpoint = this checkpoint; BALLOT_RECEIVED = ballot_receipts rows with received_checkpoint = this checkpoint",
+            "required": [
+              "TOKEN_USED",
+              "BALLOT_RECEIVED"
+            ],
+            "properties": {
+              "TOKEN_USED": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "BALLOT_RECEIVED": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        }
+      },
+      "TALLY_PUBLISHED": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "final_checkpoint",
+          "ballot_count",
+          "invalid_ballots",
+          "excluded_ballots",
+          "invalid_ballot_hashes",
+          "results",
+          "ballot_set_root",
+          "result_hash"
+        ],
+        "properties": {
+          "final_checkpoint": {
+            "$ref": "common.schema.json#/$defs/Checkpoint",
+            "description": "Must equal the checkpoint committed with reason CLOSE_FINAL (enforced by the contract in publishTally and checked by R3/R5)"
+          },
+          "ballot_count": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Valid ballots counted = accepted BALLOT_RECEIVED with checkpoint <= final_checkpoint minus invalid_ballots"
+          },
+          "invalid_ballots": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "candidate_id",
+                "votes"
+              ],
+              "properties": {
+                "candidate_id": {
+                  "$ref": "common.schema.json#/$defs/CandidateId"
+                },
+                "votes": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "ballot_set_root": {
+            "$ref": "common.schema.json#/$defs/Sha256Hex",
+            "description": "set_root(ballot_hash of ALL accepted BALLOT_RECEIVED with checkpoint <= final_checkpoint), recomputable from the ledger"
+          },
+          "result_hash": {
+            "$ref": "common.schema.json#/$defs/Sha256Hex"
+          },
+          "excluded_ballots": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Ballots with checkpoint <= final_checkpoint whose BALLOT_RECEIVED the Gateway rejected"
+          },
+          "invalid_ballot_hashes": {
+            "type": "array",
+            "items": {
+              "$ref": "common.schema.json#/$defs/Sha256Hex"
+            },
+            "description": "ballot_hash of accepted ballots that failed the hash check or decryption (length = invalid_ballots)"
+          }
+        }
+      },
+      "ELECTION_FINALIZED": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "result_hash"
+        ],
+        "properties": {
+          "result_hash": {
+            "$ref": "common.schema.json#/$defs/Sha256Hex",
+            "description": "Must equal the TALLY_PUBLISHED result_hash"
+          }
+        }
+      },
+      "FINDING_RECORDED": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "finding_id",
+          "rule_id",
+          "result",
+          "finding_checkpoint",
+          "finding_hash",
+          "signature",
+          "submitted_via"
+        ],
+        "description": "Signed by the Rule Engine's registered key and verified by the contract, so neither Core nor the Gateway can forge, alter or (thanks to direct submission) suppress a finding record.",
+        "properties": {
+          "finding_id": {
+            "$ref": "common.schema.json#/$defs/FindingId"
+          },
+          "rule_id": {
+            "$ref": "common.schema.json#/$defs/RuleId"
+          },
+          "result": {
+            "$ref": "common.schema.json#/$defs/RuleResult"
+          },
+          "finding_checkpoint": {
+            "$ref": "common.schema.json#/$defs/Checkpoint",
+            "description": "The checkpoint the finding evaluated"
+          },
+          "finding_hash": {
+            "$ref": "common.schema.json#/$defs/Sha256Hex",
+            "description": "Hc(FindingSubmission), hashing.md"
+          },
+          "signature": {
+            "$ref": "common.schema.json#/$defs/Signature",
+            "description": "Rule Engine signature over the finding record digest (hashing.md); verified by the contract against ruleEngineSigner"
+          },
+          "submitted_via": {
+            "$ref": "common.schema.json#/$defs/SubmittedVia"
+          }
+        }
+      },
+      "FINDING_REVIEWED": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "finding_id",
+          "finding_hash",
+          "org_id",
+          "decision",
+          "note_hash",
+          "signature",
+          "submitted_via"
+        ],
+        "properties": {
+          "finding_id": {
+            "$ref": "common.schema.json#/$defs/FindingId"
+          },
+          "finding_hash": {
+            "$ref": "common.schema.json#/$defs/Sha256Hex"
+          },
+          "org_id": {
+            "$ref": "common.schema.json#/$defs/OrgId"
+          },
+          "decision": {
+            "$ref": "common.schema.json#/$defs/FindingReviewDecision"
+          },
+          "note_hash": {
+            "$ref": "common.schema.json#/$defs/Sha256Hex",
+            "description": "H(note text)"
+          },
+          "signature": {
+            "$ref": "common.schema.json#/$defs/Signature",
+            "description": "Reviewing organization's signature over the review digest (hashing.md)"
+          },
+          "submitted_via": {
+            "$ref": "common.schema.json#/$defs/SubmittedVia"
+          }
+        }
+      },
+      "ELECTION_VOIDED": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "action_id",
+          "proposal_id",
+          "finding_ids"
+        ],
+        "description": "Terminal state after an approved ELECTION_VOID (e.g. a CONFIRMED_ISSUE finding). Nothing changes afterwards; a re-run is a new election.",
+        "properties": {
+          "action_id": {
+            "$ref": "common.schema.json#/$defs/ActionId"
+          },
+          "proposal_id": {
+            "$ref": "common.schema.json#/$defs/ProposalId"
+          },
+          "finding_ids": {
+            "type": "array",
+            "items": {
+              "$ref": "common.schema.json#/$defs/FindingId"
+            },
+            "description": "Findings that justified voiding (may be empty)"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "finding_id": "fnd_9QPBV10S3S6MD1BM46MVYEZTBH",
+  "schema_version": "1",
+  "rule_id": "R5",
+  "rule_version": "0.1.0",
+  "election_id": "elc_WXWCBYB6WK952SWA0432CF1XMW",
+  "result": "INCONCLUSIVE",
+  "severity": "MEDIUM",
+  "trigger": "SCHEDULED",
+  "checked_at": "2026-11-03T09:16:30Z",
+  "checkpoint": 2,
+  "data_as_of": {
+    "ledger_last_seq": 5,
+    "ledger_last_block": 3254,
+    "checkpoint_event_id": "evt_5SCNGH7AS8NQVBSDB4NKY60P3E"
+  },
+  "observed": {
+    "nodes_reachable": 0
+  },
+  "expected": "at least one validator node readable",
+  "summary": "No validator node reachable for direct anchor reads.",
+  "evidence_refs": [],
+  "inconclusive_reason": "NODE_UNAVAILABLE"
+}

@@ -1,0 +1,40 @@
+{
+  "event_id": "evt_2ATR3MS3M4EVYGF26X9F73TX7D",
+  "schema_version": "1",
+  "election_id": "elc_WXWCBYB6WK952SWA0432CF1XMW",
+  "type": "ADMIN_ACTION_REQUESTED",
+  "source": "gateway",
+  "seq": 2,
+  "checkpoint": 3,
+  "occurred_at": "2026-11-03T09:20:13Z",
+  "time_precision": "exact",
+  "actor": {
+    "kind": "admin",
+    "org_id": "org_commission",
+    "user_id": "usr_CEJZ05XHT5GMEJ146S6JR410DD"
+  },
+  "payload": {
+    "action_id": "act_2GFSGTZJB48EY4HDD14HTWF32B",
+    "proposal_id": "prp_JQ85Q8WN821YPK214Y4KM844WQ",
+    "action_type": "TOKEN_REISSUE",
+    "target_hash": "34a04005bcaf206eec990bd9637d9fdb6725e0a0c0d4aebf003f17f4c956eb5c",
+    "requested_by_org": "org_commission",
+    "signature": {
+      "scheme": "eip191-secp256k1",
+      "signer": "0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "value": "0x4dfe0402a09c5cacec6b7309b60a60f34da0ffad7a110c8f004765a7a36f9f7a4dfe0402a09c5cacec6b7309b60a60f34da0ffad7a110c8f004765a7a36f9f7a1b"
+    },
+    "threshold": 2,
+    "expires_at": "2026-11-04T09:20:13Z"
+  },
+  "payload_hash": "e93f5b9148166672123ed151cc40f824e24ceacee377601051190c5fba0f09f7",
+  "received_at": "2026-11-03T09:20:15Z",
+  "anchor": {
+    "status": "ANCHORED",
+    "anchor_id": "anc_3P97QW8TXGTQ8J8FY7KPHHCHFC",
+    "mode": "immediate",
+    "merkle_root": "7fb088a07634384276841c841b2a2fab6ef34241c1e01589a9f449966dda3c1b",
+    "tx_hash": "0x8fda1b0c5c0c9e9fdfc2e1f687b64a5f90116af8b835faae53ccb9d85281fc33",
+    "block_number": 3410
+  }
+}

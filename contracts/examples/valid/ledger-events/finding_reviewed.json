@@ -1,0 +1,39 @@
+{
+  "event_id": "evt_7TBR1XZ45DMCVR0NMHDDB8AX28",
+  "schema_version": "1",
+  "election_id": "elc_WXWCBYB6WK952SWA0432CF1XMW",
+  "type": "FINDING_REVIEWED",
+  "source": "gateway",
+  "seq": 5,
+  "checkpoint": 5,
+  "occurred_at": "2026-11-03T09:45:00Z",
+  "time_precision": "exact",
+  "actor": {
+    "kind": "approver",
+    "org_id": "org_neutral",
+    "user_id": "usr_PXD0VCZHF46WZF4Z349QB6N2PE"
+  },
+  "payload": {
+    "finding_id": "fnd_T6W42RARYAZ3VZTJSKQJYHJJ10",
+    "finding_hash": "e0fcfbb2e441315ac00f707e58f81502dc2111c1fa781272de65e2ebd7bd4044",
+    "org_id": "org_neutral",
+    "decision": "DISMISSED",
+    "note_hash": "d1d4e446d287391f7f12662aeda8cad7bd017f448013c6504aeabb262e1e791d",
+    "signature": {
+      "scheme": "eip191-secp256k1",
+      "signer": "0xc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+      "value": "0x4984aae9cfaf8a73aa52c01bba30a9b3e9b0818626cd8500275917a53c6a85c44984aae9cfaf8a73aa52c01bba30a9b3e9b0818626cd8500275917a53c6a85c41b"
+    },
+    "submitted_via": "gateway"
+  },
+  "payload_hash": "de4928bde91772fb62b3318d6c97a839de0bbe3a95ef84e92751d2ff015b30bc",
+  "received_at": "2026-11-03T09:45:02Z",
+  "anchor": {
+    "status": "ANCHORED",
+    "anchor_id": "anc_H7GPPKC04DQKTC94HVQTHX876P",
+    "mode": "immediate",
+    "merkle_root": "23a6028d1d3e36b5577bfa2f6893dced0d227d09b411fb176e2da6264e0eeaab",
+    "tx_hash": "0x3396b1caa73e1d5845c3bf3c7801bdafc280f20082ebc298f3722950aa829931",
+    "block_number": 4154
+  }
+}

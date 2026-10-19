@@ -1,0 +1,72 @@
+{
+  "event_id": "evt_5SCNGH7AS8NQVBSDB4NKY60P3E",
+  "schema_version": "1",
+  "election_id": "elc_WXWCBYB6WK952SWA0432CF1XMW",
+  "type": "CHECKPOINT_COMMITTED",
+  "source": "core",
+  "seq": 5,
+  "checkpoint": 2,
+  "occurred_at": "2026-11-03T09:15:00Z",
+  "time_precision": "exact",
+  "actor": {
+    "kind": "system"
+  },
+  "payload": {
+    "checkpoint": 2,
+    "reason": "PERIODIC",
+    "tables": [
+      {
+        "table": "roster",
+        "row_count": 100,
+        "snapshot_hash": "bfa01c26b4b12ad235c6ad05dffce9078ace234c943b673935a409b43910d664"
+      },
+      {
+        "table": "token_status",
+        "row_count": 100,
+        "snapshot_hash": "2ee93b24710e9faa21f5b7f0b7234d8be36090fe5319fe81d1c339c549720a25"
+      },
+      {
+        "table": "credential_issuance",
+        "row_count": 9,
+        "snapshot_hash": "8958367495c7d4b3bb21343d54db87a918e860fb6fc4f2aedcf763fefafebe08"
+      },
+      {
+        "table": "ballot_receipts",
+        "row_count": 9,
+        "snapshot_hash": "e894202b1cf6502388bd3382d92668c5a6d4c92102478c07f3dd357aaba54a92"
+      },
+      {
+        "table": "admin_actions",
+        "row_count": 0,
+        "snapshot_hash": "1b1c6b6ed848f262f82b8b1a942f9a1a67bdbf1474582d6596f1f3e3118aa40f"
+      },
+      {
+        "table": "rejected_attempts",
+        "row_count": 2,
+        "snapshot_hash": "a35aeddf9080327365db9bf5a8b23e67238891c61baa699e8e60c641e69dd24f"
+      }
+    ],
+    "counts": {
+      "roster_active": 100,
+      "tokens_active": 100,
+      "token_used": 9,
+      "credentials_issued": 9,
+      "ballots_received": 9,
+      "rejected_attempts": 2
+    },
+    "voter_events": {
+      "TOKEN_USED": 9,
+      "BALLOT_RECEIVED": 9
+    }
+  },
+  "payload_hash": "be4954e57a95741aeafbd45961ad5312d8a488757bd04b0296332555f05b0ce1",
+  "received_at": "2026-11-03T09:15:02Z",
+  "anchor": {
+    "status": "ANCHORED",
+    "anchor_id": "anc_HKNDSB4RZD7S176FGWS3CR06GG",
+    "mode": "immediate",
+    "merkle_root": "4da0dd4642c03fff7bd45ba90ab1dbd14ade761c012be2af0ef19449934d8e1e",
+    "tx_hash": "0x2cf5a5e789af20ab07307520b66483072414bf3a3169dad278ca0c6967ddfd27",
+    "block_number": 3254
+  }
+}

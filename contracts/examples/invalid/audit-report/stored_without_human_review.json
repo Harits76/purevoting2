@@ -1,0 +1,86 @@
+{
+  "report_id": "rpt_K6F9DCP7ACAQMQ6JG7FP1BGJJG",
+  "schema_version": "1",
+  "finding_id": "fnd_T6W42RARYAZ3VZTJSKQJYHJJ10",
+  "election_id": "elc_WXWCBYB6WK952SWA0432CF1XMW",
+  "created_at": "2026-11-03T09:18:40Z",
+  "status": "COMPLETED",
+  "model": {
+    "provider": "anthropic",
+    "name": "claude-sonnet-5-5",
+    "prompt_version": "0.1.0"
+  },
+  "hypotheses": [
+    {
+      "cause_code": "PROCESSING_BUG",
+      "likelihood": "HIGH",
+      "explanation": "Outbox worker re-created BALLOT_RECEIVED under a new event_id after a timeout; Core stored the ballot row twice.",
+      "evidence_refs": [
+        {
+          "kind": "view_row",
+          "ref": "ballot_receipts:35c5a3cc51f182e53a70582cc08cba1a105de23cefef2a62f1fb1e7475c89b9c@2"
+        },
+        {
+          "kind": "service_log",
+          "ref": "outbox-worker:7781"
+        }
+      ]
+    },
+    {
+      "cause_code": "DATA_TAMPERING",
+      "likelihood": "LOW",
+      "explanation": "An inserted ballot needs a registered credential; credential count matches token_used.",
+      "evidence_refs": [
+        {
+          "kind": "snapshot",
+          "ref": "credential_issuance@2"
+        }
+      ],
+      "counter_evidence_refs": [
+        {
+          "kind": "finding",
+          "ref": "fnd_T6W42RARYAZ3VZTJSKQJYHJJ10"
+        }
+      ]
+    }
+  ],
+  "risk_level": "MEDIUM",
+  "additional_checks": [
+    "Check whether both ballot rows carry the same ballot_hash."
+  ],
+  "recommended_actions": [
+    {
+      "action": "Make the outbox worker reuse event_id on retry.",
+      "urgency": "BEFORE_TALLY"
+    }
+  ],
+  "limitations": "Could not inspect the database transaction log.",
+  "trace": {
+    "steps": 6,
+    "input_tokens": 18234,
+    "output_tokens": 1420,
+    "duration_ms": 21800,
+    "tool_calls": [
+      {
+        "tool": "query_view",
+        "args": {
+          "view": "ballot_receipts",
+          "checkpoint": 2
+        },
+        "called_at": "2026-11-03T09:18:21Z",
+        "ok": true,
+        "result_count": 10
+      },
+      {
+        "tool": "get_service_log",
+        "args": {
+          "service": "outbox-worker",
+          "log_id": "7781"
+        },
+        "called_at": "2026-11-03T09:18:30Z",
+        "ok": true,
+        "result_count": 1
+      }
+    ]
+  }
+}

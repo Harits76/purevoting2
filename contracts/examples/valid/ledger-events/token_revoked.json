@@ -1,0 +1,32 @@
+{
+  "event_id": "evt_6CBPDFYEWBHSBKYGZSN5YES3D8",
+  "schema_version": "1",
+  "election_id": "elc_WXWCBYB6WK952SWA0432CF1XMW",
+  "type": "TOKEN_REVOKED",
+  "source": "core",
+  "seq": 7,
+  "checkpoint": 4,
+  "occurred_at": "2026-11-03T09:31:11Z",
+  "time_precision": "exact",
+  "actor": {
+    "kind": "system"
+  },
+  "payload": {
+    "action_id": "act_2GFSGTZJB48EY4HDD14HTWF32B",
+    "proposal_id": "prp_JQ85Q8WN821YPK214Y4KM844WQ",
+    "voter_key": "vtr_TT9FARAMDRVJH3YK7K9B3X1Y2M",
+    "token_hash": "76a345a783c39b9a1d0343ab6d2fa54baab38c47dcdcda2176b260c3b635dfbe",
+    "reason": "REISSUE",
+    "token_set_root": "13ed95715ac76b2676b92dbbccea27128295454cfd27b5da9602d53c5cb9c428"
+  },
+  "payload_hash": "5b9a16c701dc27e2a2541dbfe3740ed8b4aeb722acfa6cee3b4cde122bea488a",
+  "received_at": "2026-11-03T09:45:02Z",
+  "anchor": {
+    "status": "ANCHORED",
+    "anchor_id": "anc_RH3F0YQWFTATAM9G8H39B0D985",
+    "mode": "immediate",
+    "merkle_root": "b84a347365a4fb7ec0550acf31bdceab7d1ad056595e559a15ee7340f0da29b2",
+    "tx_hash": "0xf26761d8bf56e711d185ccebbac6e7235f6ef38fdde428f3f2170b12b43ecde9",
+    "block_number": 4154
+  }
+}

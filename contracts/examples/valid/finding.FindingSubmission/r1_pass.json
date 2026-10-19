@@ -1,0 +1,27 @@
+{
+  "finding_id": "fnd_74HP1K4X0D4Q0GFZSK6YSTG109",
+  "schema_version": "1",
+  "rule_id": "R1",
+  "rule_version": "0.1.0",
+  "election_id": "elc_WXWCBYB6WK952SWA0432CF1XMW",
+  "result": "PASS",
+  "trigger": "SCHEDULED",
+  "checked_at": "2026-11-03T09:16:30Z",
+  "checkpoint": 2,
+  "data_as_of": {
+    "ledger_last_seq": 5,
+    "ledger_last_block": 3254,
+    "checkpoint_event_id": "evt_5SCNGH7AS8NQVBSDB4NKY60P3E"
+  },
+  "observed": {
+    "accepted_duplicate_tokens": 0,
+    "accepted_duplicate_nullifiers": 0,
+    "unknown_tokens": 0,
+    "unknown_nullifiers": 0,
+    "used_then_revoked": 0,
+    "refused_duplicates": 2
+  },
+  "expected": "no accepted duplicates",
+  "summary": "No accepted duplicates; 2 refused duplicate attempts.",
+  "evidence_refs": []
+}

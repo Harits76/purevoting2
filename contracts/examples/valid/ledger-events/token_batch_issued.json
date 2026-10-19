@@ -1,0 +1,31 @@
+{
+  "event_id": "evt_ASE5TR8WXC0RNXMD67DFR5KMG1",
+  "schema_version": "1",
+  "election_id": "elc_WXWCBYB6WK952SWA0432CF1XMW",
+  "type": "TOKEN_BATCH_ISSUED",
+  "source": "core",
+  "seq": 3,
+  "checkpoint": 1,
+  "occurred_at": "2026-11-03T08:12:00Z",
+  "time_precision": "exact",
+  "actor": {
+    "kind": "admin",
+    "org_id": "org_commission",
+    "user_id": "usr_CEJZ05XHT5GMEJ146S6JR410DD"
+  },
+  "payload": {
+    "batch_no": 1,
+    "token_count": 100,
+    "token_set_root": "fdef26b9c17c6e4d4916a96ca7608345393dd2c8089aaddcf64b71320d9bace8"
+  },
+  "payload_hash": "668a1201d901630cbf985ea51d3df30d87682b07066b95bc370c556666f38680",
+  "received_at": "2026-11-03T08:15:02Z",
+  "anchor": {
+    "status": "ANCHORED",
+    "anchor_id": "anc_P52WNTHZ1D4V2BN8Y9WZ5EWJAG",
+    "mode": "immediate",
+    "merkle_root": "4d589f072ecb80355631b7e4298b515a361815b6b377fae9e8456e2de0c59301",
+    "tx_hash": "0x05814e83b34400f0ce11a329c06645df0a53fc70c872a4e1d212f684201ce036",
+    "block_number": 1454
+  }
+}

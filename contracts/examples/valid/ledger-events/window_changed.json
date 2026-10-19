@@ -1,0 +1,30 @@
+{
+  "event_id": "evt_28Z89X20FT95SKYV42EJG7FTX5",
+  "schema_version": "1",
+  "election_id": "elc_WXWCBYB6WK952SWA0432CF1XMW",
+  "type": "WINDOW_CHANGED",
+  "source": "core",
+  "seq": 11,
+  "checkpoint": 6,
+  "occurred_at": "2026-11-03T10:05:00Z",
+  "time_precision": "exact",
+  "actor": {
+    "kind": "system"
+  },
+  "payload": {
+    "action_id": "act_GKEP9CC1C58FYTNN5QHX7W8F4G",
+    "proposal_id": "prp_AN970JQFQAB4X2SB8KR1ACTX29",
+    "old_window_end": "2026-11-03T11:00:00Z",
+    "new_window_end": "2026-11-03T11:30:00Z"
+  },
+  "payload_hash": "d7a5e292dbc45af465c5b8d723da99aebaaa12119713d7c6eb29159c8c7bc76a",
+  "received_at": "2026-11-03T10:15:02Z",
+  "anchor": {
+    "status": "ANCHORED",
+    "anchor_id": "anc_EQKND2AS3NBXSDRR3DTPFBAYDS",
+    "mode": "immediate",
+    "merkle_root": "22044dce3ce992d58324b990310e23b03cb71f6f38b6347f3d49e2b28bf552ef",
+    "tx_hash": "0x1eb3ff9a1266c84bf80330c724baf0ff2adceb3e70172d17a61d5a9757b1df6a",
+    "block_number": 5054
+  }
+}

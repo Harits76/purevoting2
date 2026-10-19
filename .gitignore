@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+__pycache__/
+node_modules/
+.venv/
+*.log
+# chain data
+ledger/data/
+ledger/**/chaindata/

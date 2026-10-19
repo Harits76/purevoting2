@@ -1,0 +1,30 @@
+{
+  "event_id": "evt_2JBA7VFWGFGZEZG2C3WBM91ZVW",
+  "schema_version": "1",
+  "election_id": "elc_WXWCBYB6WK952SWA0432CF1XMW",
+  "type": "ADMIN_ACTION_EXECUTED",
+  "source": "core",
+  "seq": 10,
+  "checkpoint": 6,
+  "occurred_at": "2026-11-03T10:04:59Z",
+  "time_precision": "exact",
+  "actor": {
+    "kind": "system"
+  },
+  "payload": {
+    "action_id": "act_GKEP9CC1C58FYTNN5QHX7W8F4G",
+    "proposal_id": "prp_AN970JQFQAB4X2SB8KR1ACTX29",
+    "action_type": "WINDOW_CHANGE",
+    "target_hash": "02d6d5d9f4b1247f80588d1e1e7c936db55e4d188eac209283cc4f8d5cdc577a"
+  },
+  "payload_hash": "5f5b8aff9e50b548eb9461e3f4b16a844d9611ef56945667c3c71e94bb825132",
+  "received_at": "2026-11-03T10:15:02Z",
+  "anchor": {
+    "status": "ANCHORED",
+    "anchor_id": "anc_G147BF93KV2MGZ5ARGFAZX3MTX",
+    "mode": "immediate",
+    "merkle_root": "2ef370a110ea52199f1085fe741c481e06409ed3dfb18a118d239c77709d77ae",
+    "tx_hash": "0xf69d05609b7726ca624d19e2255f6b7d7fb29acf9ac4e4dec49227eea8afe09e",
+    "block_number": 5054
+  }
+}

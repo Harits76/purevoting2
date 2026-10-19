@@ -1,0 +1,23 @@
+{
+  "event_id": "evr_8X46MSXVPVDQ02CBTXQQSCA60M",
+  "schema_version": "1",
+  "election_id": "elc_WXWCBYB6WK952SWA0432CF1XMW",
+  "type": "BALLOT_RECEIVED",
+  "source": "core",
+  "checkpoint": 2,
+  "occurred_at": "2026-11-03T09:00:00Z",
+  "time_precision": "bucketed",
+  "time_bucket_seconds": 900,
+  "actor": {
+    "kind": "voter_anonymous"
+  },
+  "payload": {
+    "nullifier_hash": "35c5a3cc51f182e53a70582cc08cba1a105de23cefef2a62f1fb1e7475c89b9c",
+    "ballot_hash": "d31367d80128db77396202feef1d903a624a67863cf65c05a21145549c73b76d",
+    "receipt_hash": "8ec3fadf1b797844034bdf1d50fd68736ed0504dd6efb43191d8edefdffd8674"
+  },
+  "payload_hash": "f9f3c9be06d197e85139d396d7433d436dbdd0ae2d2bb317a155e41bba850295",
+  "anchor": {
+    "status": "PENDING"
+  }
+}

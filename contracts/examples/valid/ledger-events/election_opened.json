@@ -1,0 +1,28 @@
+{
+  "event_id": "evt_DK9HZCT70R12S7Z5A4XTSHFYZ8",
+  "schema_version": "1",
+  "election_id": "elc_WXWCBYB6WK952SWA0432CF1XMW",
+  "type": "ELECTION_OPENED",
+  "source": "core",
+  "seq": 4,
+  "checkpoint": 1,
+  "occurred_at": "2026-11-03T09:00:00Z",
+  "time_precision": "exact",
+  "actor": {
+    "kind": "system"
+  },
+  "payload": {
+    "window_start": "2026-11-03T09:00:00Z",
+    "window_end": "2026-11-03T11:00:00Z"
+  },
+  "payload_hash": "4ea090fb7ac8a4fa327df161f09d93f418d6c64db262179a8b642dd6a71a686a",
+  "received_at": "2026-11-03T09:00:02Z",
+  "anchor": {
+    "status": "ANCHORED",
+    "anchor_id": "anc_NVYM6CT1G812C9E0JMPFZ6Z7GC",
+    "mode": "immediate",
+    "merkle_root": "bd44076e5d881c21caf9d40d96ff0aa4ac193866e152dcf40d635105860216ad",
+    "tx_hash": "0x3f5c778ea5cd611a1b4a0f6dbe799719b2c49f443adcdb33b5336505c152802c",
+    "block_number": 2804
+  }
+}

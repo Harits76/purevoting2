@@ -1,0 +1,37 @@
+{
+  "event_id": "evt_4RMBP09R3DPWV77XVXTRER22WW",
+  "schema_version": "1",
+  "election_id": "elc_WXWCBYB6WK952SWA0432CF1XMW",
+  "type": "FINDING_RECORDED",
+  "source": "gateway",
+  "seq": 1,
+  "checkpoint": 3,
+  "occurred_at": "2026-11-03T09:16:40Z",
+  "time_precision": "exact",
+  "actor": {
+    "kind": "system"
+  },
+  "payload": {
+    "finding_id": "fnd_T6W42RARYAZ3VZTJSKQJYHJJ10",
+    "rule_id": "R3",
+    "result": "FAIL",
+    "finding_checkpoint": 2,
+    "finding_hash": "e0fcfbb2e441315ac00f707e58f81502dc2111c1fa781272de65e2ebd7bd4044",
+    "signature": {
+      "scheme": "eip191-secp256k1",
+      "signer": "0xd4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4",
+      "value": "0x1555a7fbd3e247508fe33900ce0f97a408350536c40dc96210ffc5e761e1aeaf1555a7fbd3e247508fe33900ce0f97a408350536c40dc96210ffc5e761e1aeaf1c"
+    },
+    "submitted_via": "gateway"
+  },
+  "payload_hash": "3091e59589b7230b55927884c9de30c54957a7eb747b1407224faa3f24ec2f49",
+  "received_at": "2026-11-03T09:16:42Z",
+  "anchor": {
+    "status": "ANCHORED",
+    "anchor_id": "anc_J23M9XNGMCYS38Z7EB976GG4B2",
+    "mode": "immediate",
+    "merkle_root": "b3c67a87d8e83f9971d7271b0dbbb06efa382c91778a539809b895a029a220f4",
+    "tx_hash": "0x81c2875c291e2e3c605eed2a4042c57a90e4bfad6ce73c89488ff06d03744f5a",
+    "block_number": 3304
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "finding_id": "fnd_T6W42RARYAZ3VZTJSKQJYHJJ10",
+  "schema_version": "1",
+  "rule_id": "R3",
+  "rule_version": "0.1.0",
+  "election_id": "elc_WXWCBYB6WK952SWA0432CF1XMW",
+  "result": "FAIL",
+  "severity": "HIGH",
+  "trigger": "SCHEDULED",
+  "checked_at": "2026-11-03T09:16:30Z",
+  "checkpoint": 2,
+  "data_as_of": {
+    "ledger_last_seq": 5,
+    "ledger_last_block": 3254,
+    "checkpoint_event_id": "evt_5SCNGH7AS8NQVBSDB4NKY60P3E"
+  },
+  "observed": {
+    "roster_active": 100,
+    "tokens_active": 100,
+    "token_used": 9,
+    "credentials_issued": 9,
+    "ballots_received": 10,
+    "ledger_token_used": 9,
+    "ledger_ballots": 10,
+    "ledger_rejected_voter_events": 0,
+    "redeemed_not_voted": -1
+  },
+  "expected": "ballots_received <= credentials_issued",
+  "summary": "More ballots than registered credentials at checkpoint 2.",
+  "evidence_refs": [
+    {
+      "kind": "service_log",
+      "ref": "audit-agent:17"
+    }
+  ]
+}

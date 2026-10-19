@@ -1,0 +1,1909 @@
+openapi: 3.1.0
+info:
+  title: PureVoting 2.0 — Core API
+  version: 1.0.0
+  description: |
+    Owned by Core API (Seungmin). Serves the voter web, the admin web, and internal services.
+
+    Path groups and callers
+    - Voter (no login; the token / credential is the proof): `/v1/public/*`, `/v1/credentials:redeem`, `/v1/ballots`.
+    - Staff: other `/v1/*`, `Authorization: Bearer <JWT>` with role `admin` or `approver` (+ org_id). The `admin` role is
+      only granted to users of the election's operator_org; staff of other organizations are `approver` only (so only the
+      operator can export link CSVs, tally or finalize). Role `auditor` (invited auditors) is read-only: staff views,
+      roster summary without names, findings, reports and alerts — never names, CSVs or any write.
+    - Internal: `/internal/v1/*`, `X-Service-Key` with a different key per service. The Rule Engine key
+      (`ruleKey`) and the Audit Agent key (`agentKey`) are read-only except: ruleKey may store findings and
+      complete run requests; agentKey may create audit reports and nothing else (no log writes);
+      staff, approver and auditor accounts and their organization are created by the setup script of the deployment in the MVP
+      (no account API) — see threat-model O1; ruleKey and
+      `gatewayKey` may append their own service's log lines. No service key can call any staff or voter endpoint
+      (staff endpoints answer 401 without a staff JWT).
+
+    Storage (D-06): one PostgreSQL database with two schemas, `credential` and `ballot`, owned by different DB roles.
+    Redeem writes both in ONE transaction. Rule Engine / Audit Agent never get DB access (views only). Limitation:
+    a DB superuser or anyone with WAL / transaction-metadata access can still link token and nullifier
+    (threat-model S2) — the unlinkability guarantee holds only against parties without DB-admin access.
+
+    Consistency with the ledger (D-12, details in contracts/README.md#consistency-model)
+    - Every audit-relevant change is written to the outbox in the same DB transaction and sent to the
+      Ledger Gateway by the outbox worker (retries reuse the same event_id).
+    - State transitions apply the *stricter* behaviour immediately and the *more permissive* behaviour only
+      after the Gateway answers ACCEPTED (e.g. close: stop accepting ballots at once; open: accept ballots
+      only after ELECTION_OPENED is ACCEPTED). FINALIZED is applied only after ACCEPTED (an unconfirmed finalization
+      must not hide a CONFIRMED_ISSUE submitted directly on chain). If the Gateway REJECTS a transition: a permissive one
+      (OPEN, FINALIZED) is reverted (FINALIZED → stays TALLIED); a strict one (ROSTER_FROZEN, CLOSED) and TALLY are KEPT —
+      Core never re-opens voting or roster editing because of a ledger rejection — and an alert is raised for human resolution
+      (single rule: contracts/README.md#consistency-model).
+
+    Timeouts: 5 s for calls to the Gateway; voter endpoints must answer within 3 s.
+servers:
+  - url: http://core-api:8000
+
+tags:
+  - name: voter
+  - name: auth
+  - name: elections
+  - name: admin-actions
+  - name: audit
+  - name: internal
+
+paths:
+  # ───────────────────────────── voter ─────────────────────────────
+  /v1/public/elections/{election_id}:
+    get:
+      tags: [voter]
+      operationId: getPublicElection
+      security: []
+      parameters:
+        - { $ref: '#/components/parameters/ElectionIdPath' }
+      responses:
+        '200':
+          description: Ballot information shown to voters
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PublicElection' }
+        '404': { $ref: '#/components/responses/Problem' }
+
+  /v1/credentials:redeem:
+    post:
+      tags: [voter]
+      operationId: redeemToken
+      summary: Use a one-time link token and register the browser-generated credential (D-07)
+      description: |
+        Voter web flow:
+        1. The link format is `https://<voter-web>/vote/<election_id>#t=<token>`; the web reads `token` from the URL
+           fragment (never sent in a URL path or query) and election_id from the path.
+        2. Generate a random 128-bit `credential` in the browser and store it (with the election_id) in local storage
+           BEFORE calling this endpoint.
+        3. Send `nullifier_hash = H(credential)`. The raw credential never leaves the browser until the ballot is cast.
+        Server, in ONE DB transaction (same database, schemas `credential` and `ballot`): lock the token row; it must be
+        ISSUED (REVOKED → 404, USED → 409) → mark USED (used_checkpoint) → insert nullifier_hash into `ballot`
+        (issued_checkpoint). No column links token and nullifier (see storage limitation above). Emits TOKEN_USED.
+
+        Retry safety: if the response is lost, the browser keeps its credential. A retry answers TOKEN_ALREADY_USED;
+        the browser then simply casts the ballot — it succeeds if the first request committed. If the first
+        request did not commit, the token is still ISSUED and the retry succeeds.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [election_id, token, nullifier_hash]
+              properties:
+                election_id: { $ref: './common.schema.json#/$defs/ElectionId' }
+                token: { $ref: './common.schema.json#/$defs/Base64Url128' }
+                nullifier_hash: { $ref: './common.schema.json#/$defs/Sha256Hex' }
+      responses:
+        '200':
+          description: Token used and credential registered
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [election_id, status]
+                properties:
+                  election_id: { $ref: './common.schema.json#/$defs/ElectionId' }
+                  status: { const: REDEEMED }
+        '404':
+          description: TOKEN_INVALID (unknown or revoked token; identical response for both)
+          content:
+            application/problem+json:
+              schema: { $ref: './common.schema.json#/$defs/Problem' }
+        '409':
+          description: TOKEN_ALREADY_USED, NULLIFIER_ALREADY_REGISTERED or ELECTION_NOT_OPEN
+          content:
+            application/problem+json:
+              schema: { $ref: './common.schema.json#/$defs/Problem' }
+        '429':
+          description: RATE_LIMITED
+          content:
+            application/problem+json:
+              schema: { $ref: './common.schema.json#/$defs/Problem' }
+
+  /v1/ballots:
+    post:
+      tags: [voter]
+      operationId: submitBallot
+      summary: Cast a sealed ballot with the anonymous credential (idempotent for identical retries)
+      description: |
+        The browser stores `sealed_ballot` before sending, so a retry sends identical bytes.
+        - H(credential) not registered → 403 CREDENTIAL_UNKNOWN.
+        - Not yet used → store ballot, mark nullifier used, emit BALLOT_RECEIVED → 201.
+        - Already used with the same ballot_hash → 200 with the original receipt (retry).
+        - Already used with a different ballot_hash → 409 CREDENTIAL_ALREADY_USED.
+        The voter can compute receipt_hash = Hc({election_id, nullifier_hash, ballot_hash}) locally (hashing.md).
+        Every refused request is recorded in the `rejected_attempts` view. Nullifiers are unique per election. The
+        idempotency check comes before the window check: an identical retry after close still returns 200 with the
+        original receipt.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [election_id, credential, sealed_ballot]
+              properties:
+                election_id: { $ref: './common.schema.json#/$defs/ElectionId' }
+                credential: { $ref: './common.schema.json#/$defs/Base64Url128' }
+                sealed_ballot:
+                  type: string
+                  contentEncoding: base64
+                  maxLength: 4096
+                  description: 'libsodium sealed box of {"candidate_id": "..."} with the election public key (D-08)'
+      responses:
+        '201':
+          description: Accepted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BallotReceipt' }
+        '200':
+          description: Identical retry; original receipt
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BallotReceipt' }
+        '403':
+          description: CREDENTIAL_UNKNOWN
+          content:
+            application/problem+json:
+              schema: { $ref: './common.schema.json#/$defs/Problem' }
+        '409':
+          description: CREDENTIAL_ALREADY_USED or ELECTION_NOT_OPEN
+          content:
+            application/problem+json:
+              schema: { $ref: './common.schema.json#/$defs/Problem' }
+        '429':
+          description: RATE_LIMITED
+          content:
+            application/problem+json:
+              schema: { $ref: './common.schema.json#/$defs/Problem' }
+
+  /v1/public/receipts/{receipt_hash}:
+    get:
+      tags: [voter]
+      operationId: getReceipt
+      summary: Let a voter check that their ballot was recorded and anchored
+      security: []
+      parameters:
+        - name: receipt_hash
+          in: path
+          required: true
+          schema: { $ref: './common.schema.json#/$defs/Sha256Hex' }
+      responses:
+        '200':
+          description: Receipt status
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BallotReceipt' }
+        '404': { $ref: '#/components/responses/Problem' }
+
+  # ───────────────────────────── auth ─────────────────────────────
+  /v1/auth/login:
+    post:
+      tags: [auth]
+      operationId: login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [username, password]
+              properties:
+                username: { type: string }
+                password: { type: string, format: password }
+      responses:
+        '200':
+          description: Logged in
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [access_token, expires_in, user]
+                properties:
+                  access_token: { type: string }
+                  expires_in: { type: integer, description: seconds }
+                  user: { $ref: '#/components/schemas/StaffUser' }
+        '401': { $ref: '#/components/responses/Problem' }
+
+  # ───────────────────────────── elections ─────────────────────────────
+  /v1/elections:
+    post:
+      tags: [elections]
+      operationId: createElection
+      summary: Create an election (DRAFT). Generates the ballot key pair. Emits ELECTION_CREATED.
+      description: |
+        window_start and window_end must be multiples of time_bucket_seconds since the Unix epoch, and checkpoint_interval_seconds
+        a multiple of time_bucket_seconds (VALIDATION_ERROR otherwise).
+        operator_org is taken from the on-chain registry (`operatorOrg`, confirmed by every organization), never from the caller's login; it must be one of org_ids. Signer keys also come from the registry.
+      security: [{ bearer: [admin] }]
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ElectionCreate' }
+      responses:
+        '401': { $ref: '#/components/responses/Problem' }
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Election' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '422':
+          description: ORG_NOT_REGISTERED (an org_id is not in the registry) or VALIDATION_ERROR
+          content:
+            application/problem+json:
+              schema: { $ref: './common.schema.json#/$defs/Problem' }
+    get:
+      tags: [elections]
+      operationId: listElections
+      security: [{ bearer: [admin, approver, auditor] }]
+      responses:
+        '401': { $ref: '#/components/responses/Problem' }
+        '200':
+          description: Elections
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Election' }
+
+  /v1/elections/{election_id}:
+    get:
+      tags: [elections]
+      operationId: getElection
+      security: [{ bearer: [admin, approver, auditor] }]
+      parameters:
+        - { $ref: '#/components/parameters/ElectionIdPath' }
+      responses:
+        '401': { $ref: '#/components/responses/Problem' }
+        '200':
+          description: Election
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Election' }
+        '404': { $ref: '#/components/responses/Problem' }
+
+  /v1/elections/{election_id}:delete:
+    post:
+      tags: [elections]
+      operationId: deleteRejectedElection
+      summary: Delete an election whose ELECTION_CREATED the Gateway rejected, or whose on-chain governance does not match it
+      description: Allowed only in status DRAFT when either (a) transition.ledger_status = REJECTED for ELECTION_CREATED (it never existed on chain), or (b) creation_check = MISMATCH (the creation check of chain-interface.md failed; the DRAFT record left on chain is abandoned and the election_id is never reused). Any other state → 409.
+      security: [{ bearer: [admin] }]
+      parameters:
+        - { $ref: '#/components/parameters/ElectionIdPath' }
+      responses:
+        '204': { description: Deleted }
+        '401': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+
+  /v1/elections/{election_id}/roster:
+    put:
+      tags: [elections]
+      operationId: replaceRoster
+      summary: Upload / replace the roster (DRAFT only). Contains PII; stays in the credential DB. Core assigns random voter_keys.
+      security: [{ bearer: [admin] }]
+      parameters:
+        - { $ref: '#/components/parameters/ElectionIdPath' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [voters]
+              properties:
+                voters:
+                  type: array
+                  minItems: 1
+                  items: { $ref: '#/components/schemas/VoterInput' }
+      responses:
+        '401': { $ref: '#/components/responses/Problem' }
+        '200':
+          description: Roster stored
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RosterSummary' }
+        '409':
+          description: ROSTER_FROZEN — use admin action ROSTER_AMEND (attempt recorded in rejected_attempts)
+          content:
+            application/problem+json:
+              schema: { $ref: './common.schema.json#/$defs/Problem' }
+
+  /v1/elections/{election_id}/roster:read:
+    post:
+      tags: [elections]
+      operationId: readRoster
+      summary: Staff read of the roster with names (so approvers can check what voter_keys mean); auditors get it without names
+      description: POST so that names never appear in URLs or proxy logs. Read-only.
+      security: [{ bearer: [admin, approver, auditor] }]
+      parameters:
+        - { $ref: '#/components/parameters/ElectionIdPath' }
+      responses:
+        '200':
+          description: Roster
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [voters]
+                properties:
+                  voters:
+                    type: array
+                    items:
+                      type: object
+                      required: [voter_key, status]
+                      properties:
+                        voter_key: { $ref: './common.schema.json#/$defs/VoterKey' }
+                        status: { type: string, enum: [ACTIVE, REMOVED] }
+                        external_ref: { type: string, description: omitted for auditors }
+                        name: { type: string, description: omitted for auditors }
+        '401': { $ref: '#/components/responses/Problem' }
+
+  /v1/elections/{election_id}/roster:freeze:
+    post:
+      tags: [elections]
+      operationId: freezeRoster
+      summary: DRAFT → ROSTER_FROZEN. Emits ROSTER_FROZEN and CHECKPOINT_COMMITTED(STATE_CHANGE). Already ROSTER_FROZEN → 202 with the same election (retry-safe).
+      description: Refused with 409 INVALID_STATE_TRANSITION while creation_check ≠ PASSED (chain-interface.md creation check). Refused with BUCKET_TOO_SMALL when voter_count × time_bucket_seconds ÷ voting window length < 10 (D-10 sizing rule; fewer than 10 expected voters per bucket). Roster edits are refused immediately and stay refused even if the Gateway rejects ROSTER_FROZEN (strict transition, kept + alert). `transition.ledger_status` shows the Gateway outcome.
+      security: [{ bearer: [admin] }]
+      parameters:
+        - { $ref: '#/components/parameters/ElectionIdPath' }
+      responses:
+        '401': { $ref: '#/components/responses/Problem' }
+        '202':
+          description: Transition requested
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Election' }
+        '409':
+          description: INVALID_STATE_TRANSITION
+          content:
+            application/problem+json:
+              schema: { $ref: './common.schema.json#/$defs/Problem' }
+        '422':
+          description: BUCKET_TOO_SMALL
+          content:
+            application/problem+json:
+              schema: { $ref: './common.schema.json#/$defs/Problem' }
+
+  /v1/elections/{election_id}/tokens:issue:
+    post:
+      tags: [elections]
+      operationId: issueTokens
+      summary: Issue one-time links for every ACTIVE voter that has no non-revoked token (ROSTER_FROZEN or OPEN). Emits TOKEN_BATCH_ISSUED.
+      description: |
+        Refused with 409 INVALID_STATE_TRANSITION while creation_check ≠ PASSED.
+        Repeatable: the first call covers the whole roster; later calls cover only voters added by ROSTER_AMEND
+        or whose unused token was revoked by TOKEN_REISSUE. Raw tokens exist only in this response (CSV) or in the
+        sent emails; the server keeps token_hash only (D-16).
+        Lost response: retry with the same Idempotency-Key within 15 minutes returns the same CSV (kept encrypted in
+        memory only for that window, then wiped). For this endpoint the key is valid for 15 minutes only (not 24 h); a
+        later retry with the same key gets 409 CONFLICT and nothing is reissued. After that, use one bulk TOKEN_REISSUE for the affected voters.
+      security: [{ bearer: [admin] }]
+      parameters:
+        - { $ref: '#/components/parameters/ElectionIdPath' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [delivery]
+              properties:
+                delivery: { type: string, enum: [CSV, EMAIL] }
+      responses:
+        '401': { $ref: '#/components/responses/Problem' }
+        '200':
+          description: CSV with columns external_ref,name,link (delivery = CSV); empty body if nobody needed a token
+          content:
+            text/csv:
+              schema: { type: string }
+        '202':
+          description: Emails queued (delivery = EMAIL)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [queued]
+                properties:
+                  queued: { type: integer, minimum: 0 }
+        '409':
+          description: INVALID_STATE_TRANSITION
+          content:
+            application/problem+json:
+              schema: { $ref: './common.schema.json#/$defs/Problem' }
+
+  /v1/elections/{election_id}/tally:
+    post:
+      tags: [elections]
+      operationId: runTally
+      summary: CLOSED → TALLIED. Emits TALLY_PUBLISHED. Calling it again when already TALLIED returns 200 with the existing tally.
+      description: |
+        Preconditions (else 409): the CLOSE_FINAL checkpoint event is ACCEPTED, the election's outbox is empty and no
+        voter event with checkpoint <= final is PENDING at the Gateway (OUTBOX_NOT_DRAINED).
+        Counting: one ballot per ACCEPTED BALLOT_RECEIVED event with checkpoint <= final checkpoint (identified by its
+        nullifier_hash / event_id, so two ballots with equal ballot_hash both count); excluded_ballots counts REJECTED
+        BALLOT_RECEIVED events; for each, the ballot_receipts row must match that event
+        (nullifier_hash, ballot_hash, receipt_hash), otherwise the ballot is invalid and an alert is raised. Before decrypting, Core recomputes
+        H(sealed_ballot) and compares it with ballot_hash; a mismatch or undecryptable ballot is counted in
+        invalid_ballots and raises an alert. A decrypted plaintext is valid only if it parses as UTF-8 JSON into an object with exactly one key
+        "candidate_id" whose value is a string equal to one of the election's candidate_ids (compared after parsing, so
+        whitespace and key order do not matter); anything else is invalid. Ballots whose event the Gateway REJECTED are counted in excluded_ballots
+        and listed for human review. Core commits the TALLY checkpoint only after TALLY_PUBLISHED is ACCEPTED; from that
+        checkpoint on, the election private key is revealed to the Rule Engine (election_config view, ruleKey only — never
+        to agentKey) and to staff, so that the Rule Engine and auditors can re-decrypt every ballot and recompute the result
+        (R5). It is not published to the general public. Ballots are anonymous, so revealing the key after tally exposes no voter choice
+        unless S1/S2 links exist (threat-model).
+      security: [{ bearer: [admin] }]
+      parameters:
+        - { $ref: '#/components/parameters/ElectionIdPath' }
+      responses:
+        '401': { $ref: '#/components/responses/Problem' }
+        '200':
+          description: Result
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Tally' }
+        '409':
+          description: INVALID_STATE_TRANSITION, OUTBOX_NOT_DRAINED or LEDGER_UNAVAILABLE
+          content:
+            application/problem+json:
+              schema: { $ref: './common.schema.json#/$defs/Problem' }
+    get:
+      tags: [elections]
+      operationId: getTally
+      security: [{ bearer: [admin, approver, auditor] }]
+      parameters:
+        - { $ref: '#/components/parameters/ElectionIdPath' }
+      responses:
+        '401': { $ref: '#/components/responses/Problem' }
+        '200':
+          description: Result
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Tally' }
+        '404': { $ref: '#/components/responses/Problem' }
+
+  /v1/elections/{election_id}:finalize:
+    post:
+      tags: [elections]
+      operationId: finalizeElection
+      summary: TALLIED → FINALIZED. Emits ELECTION_FINALIZED. Already FINALIZED → 202 with the same election (retry-safe).
+      description: |
+        Preconditions (independent of the AI — works in a rules-only setup), checked by Core and enforced again by the
+        smart contract from FINDING_RECORDED / FINDING_REVIEWED ledger events:
+        1. A FINDING_RECORDED of each rule R1–R5 exists for the TALLY checkpoint, and every FINDING_RECORDED of the
+           election has its body stored at Core, else FINDINGS_UNREVIEWED. A missing body is uploaded later with the same
+           finding_id (POST /internal/v1/findings accepts it at any time before finalization under its single acceptance
+           condition: schema-valid and Hc(body) equals the recorded finding_hash); the Rule Engine keeps every body durably until the election is finalized or voided.
+        2. Every FAIL or INCONCLUSIVE finding record of the election is RESOLVED (signed DISMISSED / ACCEPTED_RISK
+           reviews from >= approval_threshold participating organizations of the election other than operator_org) or SUPERSEDED (INCONCLUSIVE only,
+           by a later PASS of the same rule); otherwise FINDINGS_UNREVIEWED.
+        3. No finding is CONFIRMED_ISSUE (any organization's signed review), else AUDIT_UNRESOLVED. The only way forward
+           from CONFIRMED_ISSUE is an approved ELECTION_VOID admin action (→ VOIDED, terminal).
+      security: [{ bearer: [admin] }]
+      parameters:
+        - { $ref: '#/components/parameters/ElectionIdPath' }
+      responses:
+        '401': { $ref: '#/components/responses/Problem' }
+        '202':
+          description: Transition requested
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Election' }
+        '409':
+          description: INVALID_STATE_TRANSITION, FINDINGS_UNREVIEWED or AUDIT_UNRESOLVED
+          content:
+            application/problem+json:
+              schema: { $ref: './common.schema.json#/$defs/Problem' }
+
+  # ───────────────────────────── admin actions ─────────────────────────────
+  /v1/elections/{election_id}/admin-actions:
+    post:
+      tags: [admin-actions]
+      operationId: createAdminAction
+      description: Refused with 409 INVALID_STATE_TRANSITION while the election's creation_check ≠ PASSED (also for submit).
+      summary: Draft a privileged action (status AWAITING_SIGNATURE). Returns target, target_hash and request_digest; the signer's client recomputes target_hash from target and the request digest itself (hashing.md) and refuses to sign on mismatch.
+      security: [{ bearer: [admin, approver] }]
+      parameters:
+        - { $ref: '#/components/parameters/ElectionIdPath' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AdminActionRequest' }
+      responses:
+        '401': { $ref: '#/components/responses/Problem' }
+        '201':
+          description: Draft created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminAction' }
+        '409':
+          description: INVALID_STATE_TRANSITION, TOKEN_ALREADY_USED (TOKEN_REISSUE / removal of a voter whose token is used)
+          content:
+            application/problem+json:
+              schema: { $ref: './common.schema.json#/$defs/Problem' }
+    get:
+      tags: [admin-actions]
+      operationId: listAdminActions
+      security: [{ bearer: [admin, approver] }]
+      parameters:
+        - { $ref: '#/components/parameters/ElectionIdPath' }
+      responses:
+        '401': { $ref: '#/components/responses/Problem' }
+        '200':
+          description: Actions
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/AdminAction' }
+
+  /v1/admin-actions/{action_id}:
+    get:
+      tags: [admin-actions]
+      operationId: getAdminAction
+      security: [{ bearer: [admin, approver] }]
+      parameters:
+        - { $ref: '#/components/parameters/ActionIdPath' }
+      responses:
+        '401': { $ref: '#/components/responses/Problem' }
+        '200':
+          description: Action
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminAction' }
+        '404': { $ref: '#/components/responses/Problem' }
+
+  /v1/admin-actions/{action_id}:submit:
+    post:
+      tags: [admin-actions]
+      operationId: submitAdminAction
+      summary: Attach the requesting organization's signature and open the Gateway proposal → PENDING_APPROVAL (same signature again → 200)
+      security: [{ bearer: [admin, approver] }]
+      parameters:
+        - { $ref: '#/components/parameters/ActionIdPath' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [signature]
+              properties:
+                signature: { $ref: './common.schema.json#/$defs/Signature' }
+      responses:
+        '401': { $ref: '#/components/responses/Problem' }
+        '200':
+          description: Proposal opened
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminAction' }
+        '422':
+          description: SIGNATURE_INVALID or LEDGER_REJECTED
+          content:
+            application/problem+json:
+              schema: { $ref: './common.schema.json#/$defs/Problem' }
+
+  /v1/admin-actions/{action_id}/decisions:
+    post:
+      tags: [admin-actions]
+      operationId: decideAdminAction
+      summary: Approve or reject as the caller's organization (signature made in the approver's client)
+      description: |
+        Relayed to Gateway `POST /v1/proposals/{id}/decisions`. When the proposal becomes APPROVED, Core executes
+        the action and emits ADMIN_ACTION_EXECUTED plus the specific event (ROSTER_AMENDED, TOKEN_REVOKED,
+        WINDOW_CHANGED, ELECTION_CLOSED, ELECTION_VOIDED). Core retries execution of an APPROVED action until EXECUTED or FAILED.
+
+        Execution-time rules (re-checked atomically when the action is executed, not only when it was requested;
+        if a rule fails the action becomes FAILED and ADMIN_ACTION_FAILED is emitted with the reason code):
+        - TOKEN_REISSUE / ROSTER_AMEND removal: lock each target token row; all must still be ISSUED, otherwise the whole
+          action FAILS (all-or-nothing, TOKEN_ALREADY_USED). ISSUED → REVOKED and TOKEN_REVOKED in the same transaction,
+          so a concurrent redeem either happens before (action FAILED) or is refused (404).
+        - ROSTER_AMEND: exactly the voter_keys in `target.add` are added and `target.remove` removed; adding a voter_key that
+          is already ACTIVE or removing one that is not ACTIVE fails the whole action (INVALID_STATE_TRANSITION); roster_hash_after
+          must equal set_root of the resulting ACTIVE roster (R4 checks both). Refused if the D-10 sizing rule would no
+          longer hold for the remaining roster (BUCKET_TOO_SMALL).
+        - An approved proposal is executed at most once (ADMIN_ACTION_EXECUTED twice → Gateway ALREADY_EXECUTED).
+        - Order (chain-interface.md "Execution order"): ADMIN_ACTION_EXECUTED first, then that proposal's effect events
+          (ROSTER_AMENDED, TOKEN_REVOKED, WINDOW_CHANGED, ELECTION_VOIDED) in the next seq numbers, before any other system event.
+        - WINDOW_CHANGE: election ROSTER_FROZEN or OPEN, execution time <= current window_end − one bucket,
+          new_window_end bucket-aligned, new_window_end > window_start and new_window_end >= ceil_to_bucket(execution time) + one bucket,
+          and the D-10 sizing rule still holds for the new window; else
+          INVALID_STATE_TRANSITION. A shortening is a strict change (applied at once); an extension is permissive (applied
+          only after WINDOW_CHANGED is ACCEPTED; until then the old end stays in force). R4 checks
+          WINDOW_CHANGED.new_window_end == target.new_window_end.
+        - ELECTION_VOID: election (in Core) DRAFT, ROSTER_FROZEN, CLOSED or TALLIED (not OPEN — close it first; not FINALIZED);
+          the contract also accepts it while its own state is still OPEN (e.g. after a rejected ELECTION_CLOSED);
+          emits ELECTION_VOIDED; terminal. Also used to cancel an election before voting.
+        - The contract rejects a WINDOW_CHANGED extension whose block time is at or after the current window_end.
+          While an extension is PENDING at the Gateway when the old window_end arrives, Core stops accepting ballots
+          (strict) but does not emit ELECTION_CLOSED until the outcome is known: ACCEPTED → voting resumes until the new
+          end; REJECTED → Core emits ELECTION_CLOSED with the old end. So Core and contract never disagree on the end.
+        - ELECTION_CLOSE_EARLY: election OPEN; effective closed_at = max(requested closed_at,
+          ceil_to_bucket(execution time)) and must be < current window_end; ELECTION_CLOSED carries both closed_at and
+          requested_closed_at so the contract and R4 can check the formula. At execution Core emits
+          ADMIN_ACTION_EXECUTED; at effective closed_at the scheduler stops accepting, emits ELECTION_CLOSED with it and
+          commits a STATE_CHANGE checkpoint. A closing time is therefore never in the past, so no ballot accepted
+          before execution becomes late.
+        Retry-safe: the same decision with the same signature again returns 200; a different one returns 409.
+      security: [{ bearer: [approver] }]
+      parameters:
+        - { $ref: '#/components/parameters/ActionIdPath' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [decision, signature]
+              properties:
+                decision: { type: string, enum: [APPROVE, REJECT] }
+                signature: { $ref: './common.schema.json#/$defs/Signature' }
+      responses:
+        '401': { $ref: '#/components/responses/Problem' }
+        '200':
+          description: Updated action
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminAction' }
+        '409':
+          description: SELF_APPROVAL_NOT_ALLOWED, already decided, or not pending
+          content:
+            application/problem+json:
+              schema: { $ref: './common.schema.json#/$defs/Problem' }
+        '403':
+          description: ORG_NOT_REGISTERED — the caller's organization does not take part in the election
+          content:
+            application/problem+json:
+              schema: { $ref: './common.schema.json#/$defs/Problem' }
+        '422':
+          description: SIGNATURE_INVALID
+          content:
+            application/problem+json:
+              schema: { $ref: './common.schema.json#/$defs/Problem' }
+
+  # ───────────────────────────── audit (staff view) ─────────────────────────────
+  /v1/elections/{election_id}/findings:
+    get:
+      tags: [audit]
+      operationId: listFindings
+      security: [{ bearer: [admin, approver, auditor] }]
+      parameters:
+        - { $ref: '#/components/parameters/ElectionIdPath' }
+        - name: rule_id
+          in: query
+          schema: { $ref: './common.schema.json#/$defs/RuleId' }
+        - name: result
+          in: query
+          schema: { $ref: './common.schema.json#/$defs/RuleResult' }
+      responses:
+        '401': { $ref: '#/components/responses/Problem' }
+        '200':
+          description: Findings, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: './finding.schema.json' }
+
+  /v1/findings/{finding_id}/review:
+    patch:
+      tags: [audit]
+      operationId: reviewFinding
+      summary: Signed review of a FAIL / INCONCLUSIVE finding by one organization (does not require an AI report)
+      description: |
+        Retry-safe: the same decision, note and signature again returns 200. If the organization already submitted the
+        same review directly on chain, this call attaches the note text (H(note) must equal note_hash) and the reviewer.
+        The reviewer signs the review digest (hashing.md) in their own client; Core relays it to Gateway
+        `POST /v1/finding-records/{id}/reviews`, which emits FINDING_REVIEWED. Reviews by operator_org are recorded but
+        never count toward RESOLVED, so the election commission cannot clear findings about its own actions alone.
+      security: [{ bearer: [admin, approver] }]
+      parameters:
+        - { $ref: '#/components/parameters/FindingIdPath' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [decision, note, signature]
+              properties:
+                decision: { $ref: './common.schema.json#/$defs/FindingReviewDecision' }
+                cause_code: { $ref: './common.schema.json#/$defs/CauseCode' }
+                report_id: { $ref: './common.schema.json#/$defs/ReportId' }
+                note: { type: string, minLength: 5, maxLength: 2000 }
+                signature: { $ref: './common.schema.json#/$defs/Signature' }
+      responses:
+        '401': { $ref: '#/components/responses/Problem' }
+        '200':
+          description: Updated finding
+          content:
+            application/json:
+              schema: { $ref: './finding.schema.json' }
+        '422':
+          description: SIGNATURE_INVALID
+          content:
+            application/problem+json:
+              schema: { $ref: './common.schema.json#/$defs/Problem' }
+        '409':
+          description: CONFLICT — PASS findings cannot be reviewed, or this organization already reviewed
+          content:
+            application/problem+json:
+              schema: { $ref: './common.schema.json#/$defs/Problem' }
+        '403':
+          description: ORG_NOT_REGISTERED — the caller's organization does not take part in the election
+          content:
+            application/problem+json:
+              schema: { $ref: './common.schema.json#/$defs/Problem' }
+
+  /v1/elections/{election_id}/audit-alerts:
+    get:
+      tags: [audit]
+      operationId: listAuditAlertsStaff
+      summary: Audit and Core alerts for staff screens
+      security: [{ bearer: [admin, approver, auditor] }]
+      parameters:
+        - { $ref: '#/components/parameters/ElectionIdPath' }
+      responses:
+        '200':
+          description: Alerts, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/AuditAlert' }
+        '401': { $ref: '#/components/responses/Problem' }
+
+  /v1/elections/{election_id}/outbox:resume:
+    post:
+      tags: [admin-actions]
+      operationId: resumeOutbox
+      summary: Resume an election's outbox FIFO after a human resolved a FIFO_STOPPED alert
+      description: |
+        Limitation: a single operator admin can resume (threat-model I14).
+        The rejected or conflicting event stays recorded (its seq was consumed). Resuming is logged as a core-api alert
+        and lets later events — including an approved ELECTION_VOID — be delivered. A resume is the only way out of a stop,
+        except creation_check = MISMATCH: no resume (409 INVALID_STATE_TRANSITION), the election can only be deleted.
+      security: [{ bearer: [admin] }]
+      parameters:
+        - { $ref: '#/components/parameters/ElectionIdPath' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 10, maxLength: 1000 }
+      responses:
+        '401': { $ref: '#/components/responses/Problem' }
+        '202': { description: Resumed }
+        '409': { $ref: '#/components/responses/Problem' }
+
+  /v1/elections/{election_id}/audit-runs:
+    post:
+      tags: [audit]
+      operationId: requestAuditRun
+      summary: Ask the Rule Engine to run now (trigger MANUAL, D-14)
+      security: [{ bearer: [admin, approver] }]
+      parameters:
+        - { $ref: '#/components/parameters/ElectionIdPath' }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                rules:
+                  type: array
+                  items: { $ref: './common.schema.json#/$defs/RuleId' }
+                checkpoint:
+                  $ref: './common.schema.json#/$defs/Checkpoint'
+                  description: Committed checkpoint to evaluate; default = latest committed
+      responses:
+        '401': { $ref: '#/components/responses/Problem' }
+        '202':
+          description: Queued
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuditRunRequest' }
+
+  /v1/findings/{finding_id}/audit-reports:
+    get:
+      tags: [audit]
+      operationId: listReportsForFinding
+      security: [{ bearer: [admin, approver, auditor] }]
+      parameters:
+        - { $ref: '#/components/parameters/FindingIdPath' }
+      responses:
+        '401': { $ref: '#/components/responses/Problem' }
+        '200':
+          description: Reports
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: './audit-report.schema.json' }
+
+  /v1/audit-reports/{report_id}/review:
+    patch:
+      tags: [audit]
+      operationId: reviewAuditReport
+      summary: Human decision on an AI report (the only way human_review changes)
+      security: [{ bearer: [admin, approver] }]
+      parameters:
+        - name: report_id
+          in: path
+          required: true
+          schema: { $ref: './common.schema.json#/$defs/ReportId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [status]
+              properties:
+                status: { type: string, enum: [CONFIRMED, REJECTED, NEEDS_MORE_INFO] }
+                confirmed_cause_code: { $ref: './common.schema.json#/$defs/CauseCode' }
+                note: { type: string, maxLength: 2000 }
+      responses:
+        '401': { $ref: '#/components/responses/Problem' }
+        '200':
+          description: Updated report
+          content:
+            application/json:
+              schema: { $ref: './audit-report.schema.json' }
+        '404': { $ref: '#/components/responses/Problem' }
+
+  # ───────────────────────────── internal ─────────────────────────────
+  /internal/v1/elections:
+    get:
+      tags: [internal]
+      operationId: listElectionsInternal
+      summary: Elections the Rule Engine / Audit Agent must audit, with their current checkpoint state
+      description: The Rule Engine polls this (e.g. every 60 s) to discover elections and newly committed checkpoints; together with /internal/v1/checkpoints it drives the automatic runs described in contracts/README.md#audit-rules. No names or PII.
+      security: [{ ruleKey: [] }, { agentKey: [] }]
+      parameters:
+        - name: status
+          in: query
+          description: Repeat to filter; default = all except DRAFT
+          schema:
+            type: array
+            items: { $ref: './common.schema.json#/$defs/ElectionStatus' }
+          style: form
+          explode: true
+      responses:
+        '200':
+          description: Elections
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [election_id, status, open_checkpoint, last_committed_checkpoint]
+                      properties:
+                        election_id: { $ref: './common.schema.json#/$defs/ElectionId' }
+                        status: { $ref: './common.schema.json#/$defs/ElectionStatus' }
+                        open_checkpoint: { $ref: './common.schema.json#/$defs/Checkpoint' }
+                        last_committed_checkpoint: { anyOf: [ { $ref: './common.schema.json#/$defs/Checkpoint' }, { type: 'null' } ] }
+                        close_final_checkpoint: { anyOf: [ { $ref: './common.schema.json#/$defs/Checkpoint' }, { type: 'null' } ] }
+                        tally_checkpoint: { anyOf: [ { $ref: './common.schema.json#/$defs/Checkpoint' }, { type: 'null' } ] }
+        '403': { $ref: '#/components/responses/Problem' }
+
+  /internal/v1/checkpoints:
+    get:
+      tags: [internal]
+      operationId: listCheckpoints
+      summary: Committed checkpoints of an election and whether the Gateway accepted their CHECKPOINT_COMMITTED event
+      security: [{ ruleKey: [] }, { agentKey: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/ElectionIdQuery' }
+      responses:
+        '403': { $ref: '#/components/responses/Problem' }
+        '200':
+          description: Checkpoints, ascending
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, open_checkpoint]
+                properties:
+                  open_checkpoint: { $ref: './common.schema.json#/$defs/Checkpoint' }
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/CheckpointInfo' }
+
+  /internal/v1/views/{view}:
+    get:
+      tags: [internal]
+      operationId: readView
+      summary: PII-free, read-only data views as of a committed checkpoint (D-13)
+      description: |
+        Rows are returned sorted by row_key. Every field is defined as of checkpoint k (mutable facts are
+        stored with the checkpoint in which they changed), so the response for a committed k never changes.
+        `snapshot_hash` covers ALL rows of the view at that checkpoint (not just this page) and must equal the value
+        in that checkpoint's CHECKPOINT_COMMITTED event; any difference means stored data was altered (R5). There is deliberately no view joining token_status with credential_issuance
+        or ballot_receipts, and no view exposes names, emails or external_ref.
+      security: [{ ruleKey: [] }, { agentKey: [] }]
+      parameters:
+        - name: view
+          in: path
+          required: true
+          schema: { $ref: './common.schema.json#/$defs/ViewName' }
+        - { $ref: '#/components/parameters/ElectionIdQuery' }
+        - name: checkpoint
+          in: query
+          description: Committed checkpoint to read at; default = latest committed
+          schema: { $ref: './common.schema.json#/$defs/Checkpoint' }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Cursor' }
+      responses:
+        '403': { $ref: '#/components/responses/Problem' }
+        '200':
+          description: One page of the view
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ViewPage' }
+        '404':
+          description: NOT_FOUND or CHECKPOINT_NOT_FOUND
+          content:
+            application/problem+json:
+              schema: { $ref: './common.schema.json#/$defs/Problem' }
+
+  /v1/elections/{election_id}/views/{view}:
+    get:
+      tags: [audit]
+      operationId: readViewStaff
+      summary: Same views as /internal/v1/views for staff of every participating organization and invited auditors, so they can re-run the rules
+      description: Identical rows and snapshot_hash as the internal view. election_config.private_key is revealed to staff and auditors from the TALLY checkpoint on.
+      security: [{ bearer: [admin, approver, auditor] }]
+      parameters:
+        - { $ref: '#/components/parameters/ElectionIdPath' }
+        - name: view
+          in: path
+          required: true
+          schema: { $ref: './common.schema.json#/$defs/ViewName' }
+        - name: checkpoint
+          in: query
+          schema: { $ref: './common.schema.json#/$defs/Checkpoint' }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Cursor' }
+      responses:
+        '200':
+          description: One page of the view
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ViewPage' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+
+  /internal/v1/views/{view}/rows/{row_key}:
+    get:
+      tags: [internal]
+      operationId: readViewRow
+      summary: One row (used to resolve evidence refs of kind view_row)
+      security: [{ ruleKey: [] }, { agentKey: [] }]
+      parameters:
+        - name: view
+          in: path
+          required: true
+          schema: { $ref: './common.schema.json#/$defs/ViewName' }
+        - name: row_key
+          in: path
+          required: true
+          schema: { type: string, maxLength: 80 }
+        - { $ref: '#/components/parameters/ElectionIdQuery' }
+        - name: checkpoint
+          in: query
+          required: true
+          schema: { $ref: './common.schema.json#/$defs/Checkpoint' }
+      responses:
+        '403': { $ref: '#/components/responses/Problem' }
+        '200':
+          description: Row
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ViewRow' }
+        '404': { $ref: '#/components/responses/Problem' }
+
+  /internal/v1/findings:
+    post:
+      tags: [internal]
+      operationId: storeFinding
+      description: Acceptance condition (the only one) — the body is valid against FindingSubmission, a FINDING_RECORDED with the same finding_id exists, and Hc(body) equals its finding_hash (rule_id, result and checkpoint then match by construction). Evidence references are resolved after storing and the outcome is written to evidence_check (OK / UNRESOLVED / PENDING); unresolvable evidence never causes a rejection. The Rule Engine validates every body against the schema locally before registering it. The Rule Engine first registers the finding at the Gateway (POST /v1/finding-records, or submitFindingRecord on chain when the Gateway is down). Core then checks that a FINDING_RECORDED with the same finding_id exists — if it is not (yet) visible at the Gateway, e.g. a direct chain submission not indexed yet, Core answers 503 and the Rule Engine retries the same body later — and that its finding_hash equals Hc(body) (mismatch → 422 FINDING_NOT_RECORDED, permanent). Core stores the submission with review.status NOT_REQUIRED (PASS) or PENDING (FAIL / INCONCLUSIVE). Same finding_id + same body → 200; different body → 409.
+      security: [{ ruleKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: './finding.schema.json#/$defs/FindingSubmission' }
+      responses:
+        '403': { $ref: '#/components/responses/Problem' }
+        '201': { description: Stored }
+        '200': { description: Identical resubmission }
+        '400': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422':
+          description: FINDING_NOT_RECORDED — a record exists but its finding_hash differs from Hc(body). Only a Rule Engine bug can cause it; the record then has no storable body and the election can only be voided (threat-model L3)
+          content:
+            application/problem+json:
+              schema: { $ref: './common.schema.json#/$defs/Problem' }
+        '503':
+          description: LEDGER_UNAVAILABLE — Core could not reach the Gateway, or the FINDING_RECORDED is not indexed yet; transient, the Rule Engine retries with the same body until 201/200
+          content:
+            application/problem+json:
+              schema: { $ref: './common.schema.json#/$defs/Problem' }
+    get:
+      tags: [internal]
+      operationId: listFindingsInternal
+      summary: The Audit Agent polls FAIL/INCONCLUSIVE findings without a report
+      security: [{ ruleKey: [] }, { agentKey: [] }]
+      parameters:
+        - name: election_id
+          in: query
+          schema: { $ref: './common.schema.json#/$defs/ElectionId' }
+        - name: result
+          in: query
+          schema:
+            type: array
+            items: { $ref: './common.schema.json#/$defs/RuleResult' }
+          style: form
+          explode: true
+        - name: has_report
+          in: query
+          schema: { type: boolean }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Cursor' }
+      responses:
+        '403': { $ref: '#/components/responses/Problem' }
+        '200':
+          description: Findings, oldest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: './finding.schema.json' }
+                  next_cursor: { type: [string, 'null'] }
+
+  /internal/v1/findings/{finding_id}:
+    get:
+      tags: [internal]
+      operationId: getFindingInternal
+      security: [{ ruleKey: [] }, { agentKey: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/FindingIdPath' }
+      responses:
+        '403': { $ref: '#/components/responses/Problem' }
+        '200':
+          description: Finding
+          content:
+            application/json:
+              schema: { $ref: './finding.schema.json' }
+        '404': { $ref: '#/components/responses/Problem' }
+
+  /internal/v1/audit-reports:
+    post:
+      tags: [internal]
+      operationId: storeAuditReport
+      description: |
+        "Evidence" below means every entry of evidence_refs and counter_evidence_refs.
+        Core accepts the report only if: (1) body validates as AuditReportSubmission (no human_review);
+        (2) finding_id exists, has result FAIL or INCONCLUSIVE and the same election_id;
+        (3) every evidence entry (evidence_refs and counter_evidence_refs) resolves (ledger via Gateway, view rows via /rows, findings, service logs).
+        Core then stores it with human_review = {status: PENDING}. Same report_id + same body → 200; different body → 409.
+      security: [{ agentKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: './audit-report.schema.json#/$defs/AuditReportSubmission' }
+      responses:
+        '403': { $ref: '#/components/responses/Problem' }
+        '201': { description: Stored }
+        '200': { description: Identical resubmission }
+        '409': { $ref: '#/components/responses/Problem' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '422':
+          description: EVIDENCE_NOT_FOUND or VALIDATION_ERROR (finding not FAIL/INCONCLUSIVE, election mismatch)
+          content:
+            application/problem+json:
+              schema: { $ref: './common.schema.json#/$defs/Problem' }
+
+  /internal/v1/audit-alerts:
+    post:
+      tags: [internal]
+      operationId: raiseAuditAlert
+      summary: Rule Engine or Gateway reports an alert (no finding is produced)
+      description: |
+        Rule Engine (ruleKey): used instead of a finding when the CHECKPOINT_COMMITTED of the checkpoint is not yet applied at
+        the Gateway (AUDIT_DELAYED) or the Gateway is unreachable (LEDGER_UNAVAILABLE).
+        Gateway (gatewayKey): ANCHOR_REJECTED when the contract refuses a batched anchor; `checkpoint` = the highest checkpoint
+        of the voter events in that batch. Alerts are shown to staff, do not need review
+        and do not block finalization; the rules for that checkpoint (or a later one) run when the ledger catches up.
+        Idempotent by (election_id, checkpoint, kind).
+      security: [{ ruleKey: [] }, { gatewayKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AuditAlertSubmission' }
+      responses:
+        '202': { description: Recorded }
+        '403': { $ref: '#/components/responses/Problem' }
+    get:
+      tags: [internal]
+      operationId: listAuditAlerts
+      security: [{ ruleKey: [] }, { agentKey: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/ElectionIdQuery' }
+      responses:
+        '200':
+          description: Alerts, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/AuditAlert' }
+        '403': { $ref: '#/components/responses/Problem' }
+
+  /internal/v1/audit-run-requests:
+    get:
+      tags: [internal]
+      operationId: listAuditRunRequests
+      summary: The Rule Engine polls manual run requests
+      security: [{ ruleKey: [] }]
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [PENDING, DONE] }
+      responses:
+        '403': { $ref: '#/components/responses/Problem' }
+        '200':
+          description: Requests
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/AuditRunRequest' }
+
+  /internal/v1/audit-run-requests/{request_id}:complete:
+    post:
+      tags: [internal]
+      operationId: completeAuditRunRequest
+      security: [{ ruleKey: [] }]
+      parameters:
+        - name: request_id
+          in: path
+          required: true
+          schema: { $ref: './common.schema.json#/$defs/RunRequestId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [finding_ids]
+              properties:
+                finding_ids:
+                  type: array
+                  items: { $ref: './common.schema.json#/$defs/FindingId' }
+      responses:
+        '403': { $ref: '#/components/responses/Problem' }
+        '200': { description: Marked DONE }
+        '404': { $ref: '#/components/responses/Problem' }
+
+  /internal/v1/service-logs:
+    get:
+      tags: [internal]
+      operationId: readServiceLogs
+      summary: PII-scrubbed service logs for the Audit Agent
+      security: [{ agentKey: [] }]
+      parameters:
+        - name: service
+          in: query
+          required: true
+          schema: { $ref: './common.schema.json#/$defs/ServiceName' }
+        - name: from
+          in: query
+          required: true
+          schema: { $ref: './common.schema.json#/$defs/Timestamp' }
+        - name: to
+          in: query
+          required: true
+          schema: { $ref: './common.schema.json#/$defs/Timestamp' }
+        - name: level
+          in: query
+          schema: { type: string, enum: [DEBUG, INFO, WARN, ERROR] }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Cursor' }
+      responses:
+        '403': { $ref: '#/components/responses/Problem' }
+        '200':
+          description: Log lines
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/LogLine' }
+                  next_cursor: { type: [string, 'null'] }
+
+  /internal/v1/service-logs:append:
+    post:
+      tags: [internal]
+      operationId: appendServiceLogs
+      summary: Each service ships its own (already scrubbed) log lines to the central log store
+      description: A service key may only append lines whose `service` is that service (gatewayKey → ledger-gateway, ruleKey → rule-engine). Core and its outbox worker write directly. The Audit Agent has no log write access (D-17); its trace is inside its report. Lines are append-only.
+      security: [{ gatewayKey: [] }, { ruleKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [lines]
+              properties:
+                lines:
+                  type: array
+                  minItems: 1
+                  maxItems: 1000
+                  items: { $ref: '#/components/schemas/LogLine' }
+      responses:
+        '202': { description: Appended }
+        '403': { $ref: '#/components/responses/Problem' }
+
+  /internal/v1/service-logs/{service}/{log_id}:
+    get:
+      tags: [internal]
+      operationId: readServiceLog
+      summary: One log line (used to resolve evidence refs of kind service_log)
+      security: [{ agentKey: [] }]
+      parameters:
+        - name: service
+          in: path
+          required: true
+          schema: { $ref: './common.schema.json#/$defs/ServiceName' }
+        - name: log_id
+          in: path
+          required: true
+          schema: { type: string, pattern: '^[A-Za-z0-9_-]{1,64}$' }
+      responses:
+        '403': { $ref: '#/components/responses/Problem' }
+        '200':
+          description: Log line
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LogLine' }
+        '404': { $ref: '#/components/responses/Problem' }
+
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Claims include role (admin | approver | auditor), org_id, user_id. Required roles are listed in each operation.
+    ruleKey:
+      type: apiKey
+      in: header
+      name: X-Service-Key
+      description: Key issued to the Rule Engine
+    agentKey:
+      type: apiKey
+      in: header
+      name: X-Service-Key
+      description: Key issued to the Audit Agent
+    gatewayKey:
+      type: apiKey
+      in: header
+      name: X-Service-Key
+      description: Key issued to the Ledger Gateway (log shipping and ANCHOR_REJECTED alerts only)
+
+  parameters:
+    ElectionIdPath:
+      name: election_id
+      in: path
+      required: true
+      schema: { $ref: './common.schema.json#/$defs/ElectionId' }
+    ElectionIdQuery:
+      name: election_id
+      in: query
+      required: true
+      schema: { $ref: './common.schema.json#/$defs/ElectionId' }
+    ActionIdPath:
+      name: action_id
+      in: path
+      required: true
+      schema: { $ref: './common.schema.json#/$defs/ActionId' }
+    FindingIdPath:
+      name: finding_id
+      in: path
+      required: true
+      schema: { $ref: './common.schema.json#/$defs/FindingId' }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: Same key + same body within 24 h returns the original response instead of creating a duplicate
+      schema: { type: string, minLength: 8, maxLength: 64 }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
+    Cursor:
+      name: cursor
+      in: query
+      schema: { type: string }
+
+  responses:
+    Problem:
+      description: Error
+      content:
+        application/problem+json:
+          schema: { $ref: './common.schema.json#/$defs/Problem' }
+
+  schemas:
+    Candidate:
+      type: object
+      required: [candidate_id, name]
+      properties:
+        candidate_id: { $ref: './common.schema.json#/$defs/CandidateId' }
+        name: { type: string, minLength: 1, maxLength: 100 }
+
+    PublicElection:
+      type: object
+      required: [election_id, title, status, window_start, window_end, time_bucket_seconds, candidates, public_key]
+      properties:
+        election_id: { $ref: './common.schema.json#/$defs/ElectionId' }
+        title: { type: string }
+        status: { $ref: './common.schema.json#/$defs/ElectionStatus' }
+        window_start: { $ref: './common.schema.json#/$defs/Timestamp' }
+        window_end: { $ref: './common.schema.json#/$defs/Timestamp' }
+        time_bucket_seconds: { type: integer, minimum: 1 }
+        candidates:
+          type: array
+          items: { $ref: '#/components/schemas/Candidate' }
+        public_key: { type: string, contentEncoding: base64, description: X25519 public key for sealed boxes }
+
+    ElectionCreate:
+      type: object
+      additionalProperties: false
+      required: [title, window_start, window_end, candidates, time_bucket_seconds, checkpoint_interval_seconds, org_ids, approval_threshold]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 200 }
+        window_start: { $ref: './common.schema.json#/$defs/Timestamp' }
+        window_end: { $ref: './common.schema.json#/$defs/Timestamp' }
+        time_bucket_seconds: { type: integer, minimum: 30, maximum: 86400, description: 'D-10. No default: choose it so that >= 10 voters are expected per bucket (checked at roster freeze)' }
+        checkpoint_interval_seconds: { type: integer, minimum: 30, description: 'D-14. Integer multiple of time_bucket_seconds (checkpoint numbers must not be finer than buckets)' }
+        candidates:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required: [name]
+            properties:
+              name: { type: string, minLength: 1, maxLength: 100 }
+        org_ids:
+          type: array
+          minItems: 3
+          uniqueItems: true
+          items: { $ref: './common.schema.json#/$defs/OrgId' }
+          description: Organizations taking part. Their signer keys are taken from the Gateway organization registry, never from this request (ORG_NOT_REGISTERED if missing).
+        approval_threshold: { $ref: './common.schema.json#/$defs/ApprovalThreshold' }
+        proposal_ttl_hours: { type: integer, minimum: 1, maximum: 168, default: 24 }
+
+    ElectionTransition:
+      type: object
+      description: Present while a state change waits for the Gateway
+      required: [to_status, event_id, ledger_status]
+      properties:
+        to_status: { $ref: './common.schema.json#/$defs/ElectionStatus' }
+        event_id: { $ref: './common.schema.json#/$defs/SystemEventId' }
+        ledger_status: { type: string, enum: [PENDING, ACCEPTED, REJECTED] }
+
+    Election:
+      allOf:
+        - { $ref: '#/components/schemas/PublicElection' }
+        - type: object
+          required: [created_at, voter_count, organizations, operator_org, approval_threshold, proposal_ttl_hours, checkpoint_interval_seconds, creation_check, counters, open_checkpoint]
+          properties:
+            created_at: { $ref: './common.schema.json#/$defs/Timestamp' }
+            roster_hash: { $ref: './common.schema.json#/$defs/Sha256Hex' }
+            voter_count: { type: integer, minimum: 0 }
+            organizations: { $ref: './common.schema.json#/$defs/Organizations' }
+            operator_org: { $ref: './common.schema.json#/$defs/OrgId' }
+            approval_threshold: { $ref: './common.schema.json#/$defs/ApprovalThreshold' }
+            proposal_ttl_hours: { type: integer, minimum: 1, maximum: 168 }
+            checkpoint_interval_seconds: { type: integer, minimum: 30 }
+            creation_check: { type: string, enum: [PENDING, PASSED, MISMATCH], description: 'Result of the creation check (chain-interface.md): on-chain governance vs ELECTION_CREATED, read from a pinned node. MISMATCH is final' }
+            open_checkpoint: { $ref: './common.schema.json#/$defs/Checkpoint' }
+            transition: { $ref: '#/components/schemas/ElectionTransition' }
+            counters:
+              type: object
+              description: Values as of the last committed checkpoint (not live), so staff screens give no finer timing than checkpoints
+              required: [as_of_checkpoint, tokens_active, tokens_used, ballots_received]
+              properties:
+                as_of_checkpoint: { $ref: './common.schema.json#/$defs/Checkpoint' }
+                tokens_active: { type: integer, minimum: 0 }
+                tokens_used: { type: integer, minimum: 0 }
+                ballots_received: { type: integer, minimum: 0 }
+
+    VoterInput:
+      type: object
+      additionalProperties: false
+      required: [external_ref, name]
+      properties:
+        external_ref: { type: string, minLength: 1, maxLength: 64, description: e.g. student number; unique per election; never leaves the credential DB }
+        name: { type: string, minLength: 1, maxLength: 100 }
+        email: { type: string, format: email }
+
+    RosterSummary:
+      type: object
+      required: [voter_count, roster_hash]
+      properties:
+        voter_count: { type: integer, minimum: 1 }
+        roster_hash: { $ref: './common.schema.json#/$defs/Sha256Hex' }
+
+    BallotReceipt:
+      type: object
+      required: [receipt_hash, status]
+      properties:
+        receipt_hash: { $ref: './common.schema.json#/$defs/Sha256Hex' }
+        status: { type: string, enum: [RECEIVED, ANCHORED, LEDGER_REJECTED] }
+        anchor_id: { $ref: './common.schema.json#/$defs/AnchorId' }
+        tx_hash: { $ref: './common.schema.json#/$defs/TxHash' }
+
+    Tally:
+      type: object
+      required: [election_id, final_checkpoint, ballot_count, invalid_ballots, invalid_ballot_hashes, excluded_ballots, results, ballot_set_root, result_hash, published_at]
+      properties:
+        election_id: { $ref: './common.schema.json#/$defs/ElectionId' }
+        final_checkpoint: { $ref: './common.schema.json#/$defs/Checkpoint' }
+        ballot_count: { type: integer, minimum: 0 }
+        invalid_ballots: { type: integer, minimum: 0 }
+        invalid_ballot_hashes:
+          type: array
+          items: { $ref: './common.schema.json#/$defs/Sha256Hex' }
+        excluded_ballots: { type: integer, minimum: 0, description: Ballots excluded because the Gateway rejected their BALLOT_RECEIVED }
+        results:
+          type: array
+          items:
+            type: object
+            required: [candidate_id, votes]
+            properties:
+              candidate_id: { $ref: './common.schema.json#/$defs/CandidateId' }
+              votes: { type: integer, minimum: 0 }
+        ballot_set_root: { $ref: './common.schema.json#/$defs/Sha256Hex' }
+        result_hash: { $ref: './common.schema.json#/$defs/Sha256Hex' }
+        published_at: { $ref: './common.schema.json#/$defs/Timestamp' }
+
+    StaffUser:
+      type: object
+      required: [user_id, role, org_id, display_name]
+      properties:
+        user_id: { $ref: './common.schema.json#/$defs/UserId' }
+        role: { type: string, enum: [admin, approver, auditor] }
+        org_id: { $ref: './common.schema.json#/$defs/OrgId' }
+        display_name: { type: string }
+
+    AdminActionRequest:
+      description: The action_type field selects exactly one shape
+      oneOf:
+        - title: ROSTER_AMEND
+          type: object
+          additionalProperties: false
+          required: [action_type, reason, params]
+          properties:
+            action_type: { const: ROSTER_AMEND }
+            reason: { type: string, minLength: 5, maxLength: 1000 }
+            params:
+              type: object
+              additionalProperties: false
+              minProperties: 1
+              properties:
+                add:
+                  type: array
+                  items: { $ref: '#/components/schemas/VoterInput' }
+                remove:
+                  type: array
+                  items: { type: string, description: external_ref of a voter whose token is not USED }
+        - title: TOKEN_REISSUE
+          type: object
+          additionalProperties: false
+          required: [action_type, reason, params]
+          properties:
+            action_type: { const: TOKEN_REISSUE }
+            reason: { type: string, minLength: 5, maxLength: 1000 }
+            params:
+              type: object
+              additionalProperties: false
+              required: [external_refs]
+              properties:
+                external_refs:
+                  type: array
+                  minItems: 1
+                  uniqueItems: true
+                  items: { type: string }
+                  description: One or many voters (e.g. a lost CSV) whose tokens are still UNUSED
+        - title: WINDOW_CHANGE
+          type: object
+          additionalProperties: false
+          required: [action_type, reason, params]
+          properties:
+            action_type: { const: WINDOW_CHANGE }
+            reason: { type: string, minLength: 5, maxLength: 1000 }
+            params:
+              type: object
+              additionalProperties: false
+              required: [new_window_end]
+              properties:
+                new_window_end: { $ref: './common.schema.json#/$defs/Timestamp' }
+        - title: ELECTION_VOID
+          type: object
+          additionalProperties: false
+          required: [action_type, reason, params]
+          properties:
+            action_type: { const: ELECTION_VOID }
+            reason: { type: string, minLength: 5, maxLength: 1000 }
+            params:
+              type: object
+              additionalProperties: false
+              required: [finding_ids]
+              properties:
+                finding_ids:
+                  type: array
+                  description: Findings that justify voiding; may be empty when cancelling before voting
+                  items: { $ref: './common.schema.json#/$defs/FindingId' }
+        - title: ELECTION_CLOSE_EARLY
+          type: object
+          additionalProperties: false
+          required: [action_type, reason, params]
+          properties:
+            action_type: { const: ELECTION_CLOSE_EARLY }
+            reason: { type: string, minLength: 5, maxLength: 1000 }
+            params:
+              type: object
+              additionalProperties: false
+              required: [closed_at]
+              properties:
+                closed_at: { $ref: './common.schema.json#/$defs/Timestamp', description: 'Requested closing time, bucket-aligned. Effective time is decided at execution: max(requested, ceil_to_bucket(execution time))' }
+
+    AdminAction:
+      type: object
+      required: [action_id, election_id, action_type, status, reason, target, target_hash, request_digest, requested_by, requested_at, proposal_id, threshold, decisions]
+      properties:
+        action_id: { $ref: './common.schema.json#/$defs/ActionId' }
+        election_id: { $ref: './common.schema.json#/$defs/ElectionId' }
+        action_type: { $ref: './common.schema.json#/$defs/AdminActionType' }
+        status: { $ref: './common.schema.json#/$defs/AdminActionStatus' }
+        reason: { type: string }
+        target: { type: object, description: Non-PII target used in target_hash (voter_keys instead of names), see hashing.md }
+        target_people:
+          type: array
+          description: Staff-only display of who the voter_keys in `target` are, so approvers know what they sign. Never copied to views, ledger or logs.
+          items:
+            type: object
+            required: [voter_key, external_ref, name]
+            properties:
+              voter_key: { $ref: './common.schema.json#/$defs/VoterKey' }
+              external_ref: { type: string }
+              name: { type: string }
+        target_hash: { $ref: './common.schema.json#/$defs/Sha256Hex' }
+        request_digest: { $ref: './common.schema.json#/$defs/Sha256Hex', description: What the requesting org signs (hashing.md) }
+        requested_by: { $ref: '#/components/schemas/StaffUser' }
+        requested_at: { $ref: './common.schema.json#/$defs/Timestamp' }
+        proposal_id: { $ref: './common.schema.json#/$defs/ProposalId' }
+        threshold: { $ref: './common.schema.json#/$defs/ApprovalThreshold' }
+        decisions:
+          type: array
+          items:
+            type: object
+            required: [org_id, decision, decided_at]
+            properties:
+              org_id: { $ref: './common.schema.json#/$defs/OrgId' }
+              decision: { type: string, enum: [APPROVE, REJECT] }
+              decided_at: { $ref: './common.schema.json#/$defs/Timestamp' }
+        executed_at: { $ref: './common.schema.json#/$defs/Timestamp' }
+        failure_code: { $ref: './common.schema.json#/$defs/ProblemCode' }
+
+    AuditRunRequest:
+      type: object
+      required: [request_id, election_id, status, requested_at]
+      properties:
+        request_id: { $ref: './common.schema.json#/$defs/RunRequestId' }
+        election_id: { $ref: './common.schema.json#/$defs/ElectionId' }
+        checkpoint:
+          $ref: './common.schema.json#/$defs/Checkpoint'
+          description: Committed checkpoint to evaluate, copied from the staff request; absent = latest committed
+        rules:
+          type: array
+          items: { $ref: './common.schema.json#/$defs/RuleId' }
+        status: { type: string, enum: [PENDING, DONE] }
+        requested_at: { $ref: './common.schema.json#/$defs/Timestamp' }
+        finding_ids:
+          type: array
+          items: { $ref: './common.schema.json#/$defs/FindingId' }
+
+    AuditAlertSubmission:
+      type: object
+      additionalProperties: false
+      description: What a service may submit. Core sets `source` from the key (ruleKey → rule-engine, gatewayKey → ledger-gateway) and refuses kinds the service may not raise (403).
+      required: [election_id, checkpoint, kind]
+      properties:
+        election_id: { $ref: './common.schema.json#/$defs/ElectionId' }
+        checkpoint: { $ref: './common.schema.json#/$defs/Checkpoint' }
+        kind: { type: string, enum: [AUDIT_DELAYED, LEDGER_UNAVAILABLE, CHAIN_CONFIG_MISMATCH, ANCHOR_REJECTED], description: 'Rule Engine: AUDIT_DELAYED, LEDGER_UNAVAILABLE, CHAIN_CONFIG_MISMATCH. Gateway: ANCHOR_REJECTED.' }
+        detail: { type: string, maxLength: 500 }
+
+    AuditAlert:
+      type: object
+      additionalProperties: false
+      required: [election_id, checkpoint, kind, raised_at]
+      properties:
+        election_id: { $ref: './common.schema.json#/$defs/ElectionId' }
+        checkpoint: { $ref: './common.schema.json#/$defs/Checkpoint' }
+        source: { type: string, enum: [rule-engine, ledger-gateway, core-api], description: Set by Core from the submitting key; core-api alerts are raised by Core itself }
+        kind:
+          type: string
+          enum: [AUDIT_DELAYED, LEDGER_UNAVAILABLE, ANCHOR_REJECTED, LEDGER_CONFLICT, FIFO_STOPPED, OUTBOX_MISMATCH, GOVERNANCE_MISMATCH, CHAIN_CONFIG_MISMATCH, CHECKPOINT_LEDGER_REJECTED, TRANSITION_REJECTED, BALLOT_EXCLUDED]
+          description: AUDIT_DELAYED, LEDGER_UNAVAILABLE from the Rule Engine (Core also raises LEDGER_UNAVAILABLE when the node for the creation check is unreachable); ANCHOR_REJECTED from the Gateway; the others only from Core (CONFLICT, FIFO stop, ledger event not matching the outbox (I12), on-chain governance not matching ELECTION_CREATED or election not found, Gateway /v1/chain differing from the pinned chain configuration (CHAIN_CONFIG_MISMATCH, also from the Rule Engine), rejected checkpoint / transition, ballot excluded from the tally)
+        raised_at: { $ref: './common.schema.json#/$defs/Timestamp' }
+        detail: { type: string, maxLength: 500, description: Same scrubbing rules as log messages (no names, tokens, credentials, token/nullifier/receipt hashes) }
+
+    CheckpointInfo:
+      type: object
+      required: [checkpoint, reason, event_id, ledger_status]
+      properties:
+        checkpoint: { $ref: './common.schema.json#/$defs/Checkpoint' }
+        reason: { type: string, enum: [PERIODIC, STATE_CHANGE, CLOSE_FINAL, TALLY] }
+        event_id: { $ref: './common.schema.json#/$defs/SystemEventId' }
+        ledger_status: { type: string, enum: [PENDING, ACCEPTED, REJECTED] }
+
+    ViewPage:
+      type: object
+      required: [view, election_id, checkpoint, total_rows, snapshot_hash, rows, next_cursor]
+      properties:
+        view: { $ref: './common.schema.json#/$defs/ViewName' }
+        election_id: { $ref: './common.schema.json#/$defs/ElectionId' }
+        checkpoint: { $ref: './common.schema.json#/$defs/Checkpoint' }
+        total_rows: { type: integer, minimum: 0 }
+        snapshot_hash:
+          anyOf: [ { $ref: './common.schema.json#/$defs/Sha256Hex' }, { type: 'null' } ]
+          description: Defined for the six snapshot tables (common SnapshotTable); null for election_config, which is not snapshotted (it is verified through config_hash, and its private_key depends on the caller)
+        rows:
+          type: array
+          items: { $ref: '#/components/schemas/ViewRow' }
+        next_cursor: { type: [string, 'null'] }
+
+    ViewRow:
+      oneOf:
+        - { $ref: '#/components/schemas/RowElectionConfig' }
+        - { $ref: '#/components/schemas/RowRoster' }
+        - { $ref: '#/components/schemas/RowTokenStatus' }
+        - { $ref: '#/components/schemas/RowCredentialIssuance' }
+        - { $ref: '#/components/schemas/RowBallotReceipt' }
+        - { $ref: '#/components/schemas/RowAdminAction' }
+        - { $ref: '#/components/schemas/RowRejectedAttempt' }
+
+    RowElectionConfig:
+      type: object
+      additionalProperties: false
+      required: [view, row_key, status, title, candidates, config_window_start, config_window_end, window_start, window_end, time_bucket_seconds, checkpoint_interval_seconds, config_hash, public_key, organizations, approval_threshold, proposal_ttl_hours, operator_org, private_key]
+      description: Everything needed to recompute config_hash (from config_window_* — the values at creation) and public_key_hash (R5). private_key is non-null iff k >= the TALLY checkpoint, and only in responses to ruleKey or staff (agentKey always gets null).
+      properties:
+        view: { const: election_config }
+        row_key: { const: config }
+        title: { type: string }
+        candidates:
+          type: array
+          items: { $ref: '#/components/schemas/Candidate' }
+        public_key: { type: string, contentEncoding: base64 }
+        private_key: { anyOf: [ { type: string, contentEncoding: base64 }, { type: 'null' } ] }
+        config_window_start: { $ref: './common.schema.json#/$defs/Timestamp', description: window_start at creation (hashed in config_hash) }
+        config_window_end: { $ref: './common.schema.json#/$defs/Timestamp', description: window_end at creation (hashed in config_hash) }
+        proposal_ttl_hours: { type: integer, minimum: 1, maximum: 168 }
+        operator_org: { $ref: './common.schema.json#/$defs/OrgId' }
+        status: { $ref: './common.schema.json#/$defs/ElectionStatus' }
+        window_start: { $ref: './common.schema.json#/$defs/Timestamp' }
+        window_end: { $ref: './common.schema.json#/$defs/Timestamp', description: Effective end at this checkpoint }
+        time_bucket_seconds: { type: integer, minimum: 1 }
+        checkpoint_interval_seconds: { type: integer, minimum: 30, description: Hashed in config_hash }
+        config_hash: { $ref: './common.schema.json#/$defs/Sha256Hex' }
+        organizations: { $ref: './common.schema.json#/$defs/Organizations' }
+        approval_threshold: { $ref: './common.schema.json#/$defs/ApprovalThreshold' }
+
+    RowRoster:
+      type: object
+      additionalProperties: false
+      required: [view, row_key, status, added_checkpoint, removed_checkpoint]
+      properties:
+        view: { const: roster }
+        row_key: { $ref: './common.schema.json#/$defs/VoterKey' }
+        status: { type: string, enum: [ACTIVE, REMOVED] }
+        added_checkpoint: { $ref: './common.schema.json#/$defs/Checkpoint' }
+        removed_checkpoint: { anyOf: [ { $ref: './common.schema.json#/$defs/Checkpoint' }, { type: 'null' } ] }
+
+    RowTokenStatus:
+      type: object
+      additionalProperties: false
+      required: [view, row_key, status, issued_checkpoint, used_checkpoint, revoked_checkpoint]
+      properties:
+        view: { const: token_status }
+        row_key: { $ref: './common.schema.json#/$defs/Sha256Hex', description: token_hash }
+        status: { type: string, enum: [ISSUED, USED, REVOKED], description: Status as of the requested checkpoint }
+        issued_checkpoint: { $ref: './common.schema.json#/$defs/Checkpoint' }
+        used_checkpoint: { anyOf: [ { $ref: './common.schema.json#/$defs/Checkpoint' }, { type: 'null' } ] }
+        revoked_checkpoint: { anyOf: [ { $ref: './common.schema.json#/$defs/Checkpoint' }, { type: 'null' } ] }
+
+    RowCredentialIssuance:
+      type: object
+      additionalProperties: false
+      required: [view, row_key, issued_checkpoint, used_checkpoint]
+      properties:
+        view: { const: credential_issuance }
+        row_key: { $ref: './common.schema.json#/$defs/Sha256Hex', description: nullifier_hash }
+        issued_checkpoint: { $ref: './common.schema.json#/$defs/Checkpoint' }
+        used_checkpoint:
+          anyOf: [ { $ref: './common.schema.json#/$defs/Checkpoint' }, { type: 'null' } ]
+          description: Checkpoint in which a ballot was cast with this credential; null if not used as of k
+
+    RowBallotReceipt:
+      type: object
+      additionalProperties: false
+      required: [view, row_key, ballot_hash, sealed_ballot, receipt_hash, received_checkpoint, received_bucket, event_id]
+      description: Immutable once written. Ledger delivery status is deliberately not part of the row (it changes after commit); it is read from the Gateway (events / rejections).
+      properties:
+        view: { const: ballot_receipts }
+        row_key: { $ref: './common.schema.json#/$defs/Sha256Hex', description: nullifier_hash }
+        ballot_hash: { $ref: './common.schema.json#/$defs/Sha256Hex' }
+        sealed_ballot: { type: string, contentEncoding: base64, maxLength: 4096, description: The stored encrypted ballot; R5 checks H(bytes) == ballot_hash and the snapshot covers these bytes }
+        receipt_hash: { $ref: './common.schema.json#/$defs/Sha256Hex' }
+        received_checkpoint: { $ref: './common.schema.json#/$defs/Checkpoint' }
+        received_bucket: { $ref: './common.schema.json#/$defs/Timestamp', description: Bucketed official acceptance time (same as the event's occurred_at) }
+        event_id: { $ref: './common.schema.json#/$defs/VoterEventId' }
+
+    RowAdminAction:
+      type: object
+      additionalProperties: false
+      required: [view, row_key, action_type, status, requested_by_org, proposal_id, target, target_hash, requested_checkpoint, status_checkpoint]
+      description: status is the status as of checkpoint k, reconstructed from Core's per-action status history (each change stores the checkpoint it happened in)
+      properties:
+        view: { const: admin_actions }
+        row_key: { $ref: './common.schema.json#/$defs/ActionId' }
+        action_type: { $ref: './common.schema.json#/$defs/AdminActionType' }
+        status: { $ref: './common.schema.json#/$defs/AdminActionStatus' }
+        requested_by_org: { $ref: './common.schema.json#/$defs/OrgId' }
+        proposal_id: { $ref: './common.schema.json#/$defs/ProposalId' }
+        target: { type: object, description: Non-PII target exactly as hashed into target_hash (hashing.md) }
+        target_hash: { $ref: './common.schema.json#/$defs/Sha256Hex' }
+        requested_checkpoint: { $ref: './common.schema.json#/$defs/Checkpoint' }
+        status_checkpoint: { $ref: './common.schema.json#/$defs/Checkpoint', description: Checkpoint in which the action reached `status` }
+
+    RowRejectedAttempt:
+      type: object
+      additionalProperties: false
+      required: [view, row_key, kind, subject_hash, checkpoint]
+      properties:
+        view: { const: rejected_attempts }
+        row_key: { $ref: './common.schema.json#/$defs/AttemptId' }
+        kind:
+          type: string
+          enum: [TOKEN_INVALID, TOKEN_ALREADY_USED, NULLIFIER_ALREADY_REGISTERED, CREDENTIAL_UNKNOWN, CREDENTIAL_ALREADY_USED, ELECTION_NOT_OPEN, ROSTER_FROZEN, RATE_LIMITED, SIGNATURE_INVALID, SELF_APPROVAL_NOT_ALLOWED, INVALID_STATE_TRANSITION, FINDINGS_UNREVIEWED, AUDIT_UNRESOLVED, BUCKET_TOO_SMALL]
+          description: Voter-side refusals and refused staff actions. Reverted direct submissions to the contract are not recorded here (they never reach Core or the Gateway)
+        subject_hash:
+          anyOf: [ { $ref: './common.schema.json#/$defs/Sha256Hex' }, { type: 'null' } ]
+          description: token_hash or nullifier_hash when known (never a raw token or credential)
+        checkpoint: { $ref: './common.schema.json#/$defs/Checkpoint', description: Coarse time only }
+
+    LogLine:
+      type: object
+      additionalProperties: false
+      required: [log_id, service, at, level, message]
+      properties:
+        log_id: { type: string, pattern: '^[A-Za-z0-9_-]{1,64}$' }
+        service: { $ref: './common.schema.json#/$defs/ServiceName' }
+        at: { $ref: './common.schema.json#/$defs/Timestamp' }
+        level: { type: string, enum: [DEBUG, INFO, WARN, ERROR] }
+        message:
+          type: string
+          maxLength: 2000
+          description: Scrubbed before storage (no names, emails, tokens, credentials, token/nullifier hashes). The Audit Agent treats it as untrusted data, never as instructions.
+        context:
+          type: object
+          additionalProperties: false
+          description: Fixed keys only
+          properties:
+            request_id: { type: string, maxLength: 64 }
+            election_id: { $ref: './common.schema.json#/$defs/ElectionId' }
+            event_id: { $ref: './common.schema.json#/$defs/SystemEventId', description: System events only; voter-side event IDs are never logged }
+            http_status: { type: integer }
+            duration_ms: { type: integer, minimum: 0 }
+            error_code: { $ref: './common.schema.json#/$defs/ProblemCode' }

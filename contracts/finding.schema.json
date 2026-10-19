@@ -1,0 +1,425 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://purevoting2.local/contracts/finding.schema.json",
+  "title": "Finding (stored)",
+  "description": "A stored finding = FindingSubmission (the Rule Engine registers its hash at the Gateway, which emits FINDING_RECORDED, and stores the body at Core) + `review`, aggregated by Core from FINDING_REVIEWED ledger events signed by organizations. Rule inputs and formulas: contracts/README.md#audit-rules.",
+  "$ref": "#/$defs/Finding",
+  "$defs": {
+    "FindingBody": {
+      "type": "object",
+      "required": [
+        "finding_id",
+        "schema_version",
+        "rule_id",
+        "rule_version",
+        "election_id",
+        "result",
+        "trigger",
+        "checked_at",
+        "checkpoint",
+        "data_as_of",
+        "observed",
+        "expected",
+        "summary",
+        "evidence_refs"
+      ],
+      "properties": {
+        "finding_id": {
+          "$ref": "common.schema.json#/$defs/FindingId"
+        },
+        "schema_version": {
+          "const": "1"
+        },
+        "rule_id": {
+          "$ref": "common.schema.json#/$defs/RuleId"
+        },
+        "rule_version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$"
+        },
+        "election_id": {
+          "$ref": "common.schema.json#/$defs/ElectionId"
+        },
+        "result": {
+          "$ref": "common.schema.json#/$defs/RuleResult"
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "LOW",
+            "MEDIUM",
+            "HIGH",
+            "CRITICAL"
+          ],
+          "description": "Required unless result = PASS"
+        },
+        "trigger": {
+          "type": "string",
+          "enum": [
+            "SCHEDULED",
+            "ELECTION_CLOSED",
+            "TALLY",
+            "MANUAL"
+          ],
+          "description": "D-14"
+        },
+        "run_request_id": {
+          "$ref": "common.schema.json#/$defs/RunRequestId",
+          "description": "Set when trigger = MANUAL"
+        },
+        "checked_at": {
+          "$ref": "common.schema.json#/$defs/Timestamp"
+        },
+        "checkpoint": {
+          "$ref": "common.schema.json#/$defs/Checkpoint",
+          "description": "Common reference point: every view was read with ?checkpoint=<this>, and ledger voter-side events were filtered to checkpoint <= this"
+        },
+        "data_as_of": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ledger_last_seq",
+            "checkpoint_event_id"
+          ],
+          "properties": {
+            "ledger_last_seq": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Highest core seq applied by the Gateway when the rule read the ledger"
+            },
+            "ledger_last_block": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "checkpoint_event_id": {
+              "$ref": "common.schema.json#/$defs/SystemEventId",
+              "description": "The CHECKPOINT_COMMITTED event for `checkpoint` (always present: rules run only after it is applied at the Gateway)"
+            }
+          }
+        },
+        "observed": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "$ref": "common.schema.json#/$defs/NoFloat"
+          },
+          "description": "Rule-specific keys listed in contracts/README.md#audit-rules; no non-integer numbers (the body is hashed)"
+        },
+        "expected": {
+          "type": "string",
+          "minLength": 1
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "inconclusive_reason": {
+          "type": "string",
+          "enum": [
+            "BATCH_NOT_ANCHORED",
+            "NODE_UNAVAILABLE",
+            "VIEW_UNAVAILABLE",
+            "KEY_NOT_REVEALED",
+            "OTHER"
+          ],
+          "description": "Required when result = INCONCLUSIVE. A finding is only produced for a checkpoint whose CHECKPOINT_COMMITTED is already applied at the Gateway; if it is not, or the Gateway is unreachable, the Rule Engine produces no finding and raises an AUDIT_DELAYED alert instead (POST /internal/v1/audit-alerts)."
+        },
+        "evidence_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "common.schema.json#/$defs/EvidenceRef"
+          }
+        },
+        "previous_finding_id": {
+          "$ref": "common.schema.json#/$defs/FindingId"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "result": {
+                "enum": [
+                  "FAIL",
+                  "INCONCLUSIVE"
+                ]
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "severity"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "result": {
+                "const": "FAIL"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "evidence_refs": {
+                "minItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "result": {
+                "const": "INCONCLUSIVE"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "inconclusive_reason"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "result": {
+                "const": "INCONCLUSIVE"
+              },
+              "inconclusive_reason": {
+                "not": {
+                  "enum": [
+                    "NODE_UNAVAILABLE",
+                    "VIEW_UNAVAILABLE"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "inconclusive_reason"
+            ]
+          },
+          "then": {
+            "properties": {
+              "evidence_refs": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "FindingReview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "reviews"
+      ],
+      "description": "status = the contract's findingRecord status as exposed by the Gateway (contract_status); Core lists the FINDING_REVIEWED events as `reviews` but does not re-derive the status. Rules, for reference: built from FINDING_REVIEWED ledger events (submitted through Core or directly on chain). Precedence: any CONFIRMED_ISSUE review by a participating organization → CONFIRMED_ISSUE; else RESOLVED when >= approval_threshold participating organizations of the election other than operator_org recorded DISMISSED or ACCEPTED_RISK; else SUPERSEDED for an INCONCLUSIVE finding when a PASS finding of the same rule exists at a higher committed checkpoint, or at the same checkpoint but recorded later (a re-run after the cause cleared — the only way to supersede at the TALLY checkpoint); FAIL is never superseded; else PENDING.",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "NOT_REQUIRED",
+            "PENDING",
+            "RESOLVED",
+            "SUPERSEDED",
+            "CONFIRMED_ISSUE"
+          ]
+        },
+        "superseded_by": {
+          "$ref": "common.schema.json#/$defs/FindingId"
+        },
+        "reviews": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "org_id",
+              "decision",
+              "note_hash",
+              "signature",
+              "submitted_via",
+              "event_id"
+            ],
+            "properties": {
+              "org_id": {
+                "$ref": "common.schema.json#/$defs/OrgId"
+              },
+              "decision": {
+                "$ref": "common.schema.json#/$defs/FindingReviewDecision"
+              },
+              "reviewer_id": {
+                "$ref": "common.schema.json#/$defs/UserId",
+                "description": "Present when submitted through Core"
+              },
+              "reviewed_at": {
+                "$ref": "common.schema.json#/$defs/Timestamp"
+              },
+              "cause_code": {
+                "$ref": "common.schema.json#/$defs/CauseCode"
+              },
+              "report_id": {
+                "$ref": "common.schema.json#/$defs/ReportId",
+                "description": "AI report consulted, if any (optional)"
+              },
+              "note": {
+                "type": "string",
+                "minLength": 5,
+                "maxLength": 2000,
+                "description": "Present when submitted through Core, or attached later; H(note) must equal note_hash"
+              },
+              "signature": {
+                "$ref": "common.schema.json#/$defs/Signature"
+              },
+              "event_id": {
+                "$ref": "common.schema.json#/$defs/SystemEventId",
+                "description": "FINDING_REVIEWED event"
+              },
+              "note_hash": {
+                "$ref": "common.schema.json#/$defs/Sha256Hex"
+              },
+              "submitted_via": {
+                "$ref": "common.schema.json#/$defs/SubmittedVia"
+              }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "submitted_via": {
+                      "const": "gateway"
+                    }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "reviewer_id",
+                    "reviewed_at",
+                    "note"
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "SUPERSEDED"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "superseded_by"
+            ]
+          }
+        }
+      ]
+    },
+    "FindingSubmission": {
+      "description": "Body of POST /internal/v1/findings (ruleKey). `review` is NOT allowed.",
+      "allOf": [
+        {
+          "$ref": "#/$defs/FindingBody"
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "Finding": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/FindingBody"
+        },
+        {
+          "type": "object",
+          "required": [
+            "review",
+            "recorded_event_id",
+            "evidence_check"
+          ],
+          "properties": {
+            "review": {
+              "$ref": "#/$defs/FindingReview"
+            },
+            "recorded_event_id": {
+              "$ref": "common.schema.json#/$defs/SystemEventId",
+              "description": "FINDING_RECORDED event"
+            },
+            "evidence_check": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "status"
+              ],
+              "description": "Added by Core when storing the body; not part of finding_hash. Unresolvable evidence never blocks storage — it is flagged here for reviewers.",
+              "properties": {
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "OK",
+                    "UNRESOLVED",
+                    "PENDING"
+                  ],
+                  "description": "PENDING: a referenced item (e.g. an earlier finding still being stored) may appear later; Core re-checks"
+                },
+                "unresolved_refs": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "common.schema.json#/$defs/EvidenceRef"
+                  }
+                },
+                "checked_at": {
+                  "$ref": "common.schema.json#/$defs/Timestamp"
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "result": {
+                "const": "PASS"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "review": {
+                "properties": {
+                  "status": {
+                    "const": "NOT_REQUIRED"
+                  }
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "review": {
+                "properties": {
+                  "status": {
+                    "not": {
+                      "const": "NOT_REQUIRED"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    }
+  }
+}

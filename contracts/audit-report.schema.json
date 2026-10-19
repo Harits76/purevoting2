@@ -1,0 +1,373 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://purevoting2.local/contracts/audit-report.schema.json",
+  "title": "AuditReport (stored)",
+  "description": "A stored audit report = what the Audit Agent submitted (AuditReportSubmission) + the human_review block that ONLY Core adds (PENDING on creation, changed only through PATCH /v1/audit-reports/{id}/review by staff). Final judgement is always human.",
+  "$ref": "#/$defs/AuditReport",
+  "$defs": {
+    "ReportBody": {
+      "type": "object",
+      "required": [
+        "report_id",
+        "schema_version",
+        "finding_id",
+        "election_id",
+        "created_at",
+        "status",
+        "model",
+        "hypotheses",
+        "risk_level",
+        "additional_checks",
+        "recommended_actions",
+        "limitations",
+        "trace"
+      ],
+      "properties": {
+        "report_id": {
+          "$ref": "common.schema.json#/$defs/ReportId"
+        },
+        "schema_version": {
+          "const": "1"
+        },
+        "finding_id": {
+          "$ref": "common.schema.json#/$defs/FindingId",
+          "description": "Core checks it exists, is FAIL/INCONCLUSIVE and belongs to election_id"
+        },
+        "election_id": {
+          "$ref": "common.schema.json#/$defs/ElectionId"
+        },
+        "created_at": {
+          "$ref": "common.schema.json#/$defs/Timestamp"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "COMPLETED",
+            "ESCALATED",
+            "ABORTED"
+          ],
+          "description": "ESCALATED: could not explain, asks for human investigation. ABORTED: budget/step limit or tool failure."
+        },
+        "abort_reason": {
+          "type": "string",
+          "enum": [
+            "STEP_LIMIT",
+            "TOKEN_BUDGET",
+            "TIMEOUT",
+            "TOOL_ERROR",
+            "MODEL_ERROR"
+          ]
+        },
+        "model": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "provider",
+            "name",
+            "prompt_version"
+          ],
+          "properties": {
+            "provider": {
+              "type": "string",
+              "examples": [
+                "anthropic"
+              ]
+            },
+            "name": {
+              "type": "string",
+              "examples": [
+                "claude-sonnet-5-5"
+              ]
+            },
+            "prompt_version": {
+              "type": "string",
+              "pattern": "^\\d+\\.\\d+\\.\\d+$"
+            }
+          }
+        },
+        "hypotheses": {
+          "type": "array",
+          "description": "Possible causes, most likely first",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "cause_code",
+              "explanation",
+              "likelihood",
+              "evidence_refs"
+            ],
+            "properties": {
+              "cause_code": {
+                "$ref": "common.schema.json#/$defs/CauseCode"
+              },
+              "explanation": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000
+              },
+              "likelihood": {
+                "type": "string",
+                "enum": [
+                  "HIGH",
+                  "MEDIUM",
+                  "LOW"
+                ]
+              },
+              "evidence_refs": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "common.schema.json#/$defs/EvidenceRef"
+                }
+              },
+              "counter_evidence_refs": {
+                "type": "array",
+                "items": {
+                  "$ref": "common.schema.json#/$defs/EvidenceRef"
+                }
+              }
+            }
+          }
+        },
+        "risk_level": {
+          "type": "string",
+          "enum": [
+            "LOW",
+            "MEDIUM",
+            "HIGH",
+            "CRITICAL"
+          ]
+        },
+        "additional_checks": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "recommended_actions": {
+          "type": "array",
+          "description": "Suggestions for humans only. The agent has no tool that can execute them.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "urgency"
+            ],
+            "properties": {
+              "action": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 500
+              },
+              "urgency": {
+                "type": "string",
+                "enum": [
+                  "IMMEDIATE",
+                  "BEFORE_TALLY",
+                  "AFTER_ELECTION"
+                ]
+              }
+            }
+          }
+        },
+        "limitations": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "trace": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "steps",
+            "tool_calls"
+          ],
+          "properties": {
+            "steps": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "input_tokens": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "output_tokens": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "duration_ms": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "tool_calls": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "tool",
+                  "called_at",
+                  "ok"
+                ],
+                "properties": {
+                  "tool": {
+                    "$ref": "#/$defs/AgentTool"
+                  },
+                  "args": {
+                    "type": "object"
+                  },
+                  "called_at": {
+                    "$ref": "common.schema.json#/$defs/Timestamp"
+                  },
+                  "ok": {
+                    "type": "boolean"
+                  },
+                  "result_count": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "COMPLETED"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "hypotheses": {
+                "minItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "ABORTED"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "abort_reason"
+            ]
+          }
+        }
+      ]
+    },
+    "AgentTool": {
+      "type": "string",
+      "description": "The complete tool set of the Audit Agent. All are read-only except submit_report, which can only create a new report.",
+      "enum": [
+        "get_finding",
+        "list_checkpoints",
+        "get_ledger_events",
+        "get_ledger_event",
+        "get_ledger_rejections",
+        "get_anchor",
+        "get_anchor_leaves",
+        "verify_ledger",
+        "get_proposal",
+        "list_organizations",
+        "query_view",
+        "get_view_row",
+        "get_service_logs",
+        "get_service_log",
+        "get_finding_records",
+        "get_chain_state",
+        "list_elections",
+        "list_audit_alerts",
+        "submit_report"
+      ]
+    },
+    "HumanReview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "PENDING",
+            "CONFIRMED",
+            "REJECTED",
+            "NEEDS_MORE_INFO"
+          ]
+        },
+        "confirmed_cause_code": {
+          "$ref": "common.schema.json#/$defs/CauseCode"
+        },
+        "reviewer_id": {
+          "$ref": "common.schema.json#/$defs/UserId"
+        },
+        "reviewed_at": {
+          "$ref": "common.schema.json#/$defs/Timestamp"
+        },
+        "note": {
+          "type": "string",
+          "maxLength": 2000
+        }
+      },
+      "if": {
+        "properties": {
+          "status": {
+            "enum": [
+              "CONFIRMED",
+              "REJECTED",
+              "NEEDS_MORE_INFO"
+            ]
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "reviewer_id",
+          "reviewed_at"
+        ]
+      }
+    },
+    "AuditReportSubmission": {
+      "description": "Body of POST /internal/v1/audit-reports (Audit Agent key). human_review is NOT allowed here.",
+      "allOf": [
+        {
+          "$ref": "#/$defs/ReportBody"
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "AuditReport": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/ReportBody"
+        },
+        {
+          "type": "object",
+          "required": [
+            "human_review"
+          ],
+          "properties": {
+            "human_review": {
+              "$ref": "#/$defs/HumanReview"
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    }
+  }
+}

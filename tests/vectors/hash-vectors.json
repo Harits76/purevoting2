@@ -1,0 +1,588 @@
+{
+  "description": "Shared hash test vectors generated from contracts/hashing.md by tools/make_hash_vectors.py. Do not edit by hand.",
+  "vectors": [
+    {
+      "name": "H_empty",
+      "formula": "H('')",
+      "input": "",
+      "expected": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "H_text",
+      "formula": "H(utf8)",
+      "input": "PureVoting",
+      "expected": "6b1f2c11088f78746673e490829bcc2824b76e1c9f205946d76802993c33e4cb"
+    },
+    {
+      "name": "canonical",
+      "formula": "RFC 8785 JCS text",
+      "input": {
+        "b": 1,
+        "a": "x",
+        "c": {
+          "z": [
+            3,
+            1
+          ],
+          "y": null
+        }
+      },
+      "expected": "{\"a\":\"x\",\"b\":1,\"c\":{\"y\":null,\"z\":[3,1]}}"
+    },
+    {
+      "name": "Hc",
+      "formula": "H(canonical(obj))",
+      "input": {
+        "b": 1,
+        "a": "x",
+        "c": {
+          "z": [
+            3,
+            1
+          ],
+          "y": null
+        }
+      },
+      "expected": "9bb8e1c58f9b590522d797c86ef0bbeacfd4c2a5e80b1da0af0078a4b67042b7"
+    },
+    {
+      "name": "merkle_root_0",
+      "formula": "merkle_root(leaves in order; odd node carried up; empty = H(''))",
+      "input": [],
+      "expected": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "merkle_root_1",
+      "formula": "merkle_root(leaves in order; odd node carried up; empty = H(''))",
+      "input": [
+        "6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b"
+      ],
+      "expected": "6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b"
+    },
+    {
+      "name": "merkle_root_2",
+      "formula": "merkle_root(leaves in order; odd node carried up; empty = H(''))",
+      "input": [
+        "6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b",
+        "d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3a666eec13ab35"
+      ],
+      "expected": "33b675636da5dcc86ec847b38c08fa49ff1cace9749931e0a5d4dfdbdedd808a"
+    },
+    {
+      "name": "merkle_root_3",
+      "formula": "merkle_root(leaves in order; odd node carried up; empty = H(''))",
+      "input": [
+        "6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b",
+        "d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3a666eec13ab35",
+        "4e07408562bedb8b60ce05c1decfe3ad16b72230967de01f640b7e4729b49fce"
+      ],
+      "expected": "201c46820e0cb1a0bbc6bf843d1dc7d85396f633ce52200ad25bc4e95473a322"
+    },
+    {
+      "name": "merkle_root_5",
+      "formula": "merkle_root(leaves in order; odd node carried up; empty = H(''))",
+      "input": [
+        "6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b",
+        "d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3a666eec13ab35",
+        "4e07408562bedb8b60ce05c1decfe3ad16b72230967de01f640b7e4729b49fce",
+        "4b227777d4dd1fc61c6f884f48641d02b4d121d3fd328cb08b5531fcacdabf8a",
+        "ef2d127de37b942baad06145e54b0c619a1f22327b2ebbcfbec78f5564afe39d"
+      ],
+      "expected": "6bf4ab49b42b7f673ad25bf2a8061c945388ad237b1bdc46e359eb921356f5cd"
+    },
+    {
+      "name": "set_root_dedup",
+      "formula": "merkle_root(sorted, duplicates removed)",
+      "input": [
+        "4e07408562bedb8b60ce05c1decfe3ad16b72230967de01f640b7e4729b49fce",
+        "6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b",
+        "d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3a666eec13ab35",
+        "6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b"
+      ],
+      "expected": "4ead5174b1ce2db4fa685818d172acb59d666fcfa595d64ae2b7e837edd31fbe"
+    },
+    {
+      "name": "leaf_hash_token_used",
+      "formula": "Hc(event without received_at and anchor)",
+      "input": {
+        "event_id": "evr_CS16CPQ7NC4Y612Y9CB7DBAJ63",
+        "schema_version": "1",
+        "election_id": "elc_WXWCBYB6WK952SWA0432CF1XMW",
+        "type": "TOKEN_USED",
+        "source": "core",
+        "checkpoint": 2,
+        "occurred_at": "2026-11-03T09:00:00Z",
+        "time_precision": "bucketed",
+        "time_bucket_seconds": 900,
+        "actor": {
+          "kind": "voter_anonymous"
+        },
+        "payload": {
+          "token_hash": "65d01b54c870182ca3365564dbc7677a196f72a52f1ec15fdbf2da5efd013345"
+        },
+        "payload_hash": "a15db23a37c7bf7d6f863f385c18aca8a0bbf746cbee46029f3870e0eed1ce90"
+      },
+      "expected": "f9eb2c624459b32370656a9dcd9e2d70d2235e5f467f173bd515e45f113e5f0f"
+    },
+    {
+      "name": "payload_hash_token_used",
+      "formula": "Hc(payload)",
+      "input": {
+        "token_hash": "65d01b54c870182ca3365564dbc7677a196f72a52f1ec15fdbf2da5efd013345"
+      },
+      "expected": "a15db23a37c7bf7d6f863f385c18aca8a0bbf746cbee46029f3870e0eed1ce90"
+    },
+    {
+      "name": "leaf_hash_election_created",
+      "formula": "Hc(event without received_at and anchor)",
+      "input": {
+        "event_id": "evt_28NP5Y4T1Z0RR04557GTNRXWX5",
+        "schema_version": "1",
+        "election_id": "elc_WXWCBYB6WK952SWA0432CF1XMW",
+        "type": "ELECTION_CREATED",
+        "source": "core",
+        "seq": 1,
+        "checkpoint": 0,
+        "occurred_at": "2026-11-03T08:00:00Z",
+        "time_precision": "exact",
+        "actor": {
+          "kind": "admin",
+          "org_id": "org_commission",
+          "user_id": "usr_CEJZ05XHT5GMEJ146S6JR410DD"
+        },
+        "payload": {
+          "config_hash": "e67d23e7820c49a8051dac2831f38290f5e72f66c8db5079eeb60d82f14894c0",
+          "window_start": "2026-11-03T09:00:00Z",
+          "window_end": "2026-11-03T11:00:00Z",
+          "time_bucket_seconds": 900,
+          "checkpoint_interval_seconds": 900,
+          "candidate_count": 3,
+          "organizations": [
+            {
+              "org_id": "org_commission",
+              "signer": "0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+            },
+            {
+              "org_id": "org_neutral",
+              "signer": "0xc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3"
+            },
+            {
+              "org_id": "org_observer",
+              "signer": "0xb2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+            }
+          ],
+          "approval_threshold": 2,
+          "proposal_ttl_hours": 24,
+          "operator_org": "org_commission",
+          "public_key_hash": "eb3102a6cb586765d01fad324523ec0bc67b9efd6a2d9589c135adfedf7922cc"
+        },
+        "payload_hash": "f3cf32669c2bbdc1907a4ac6db472051b8f0e4aa4923fe3da34a5f7387272f7b"
+      },
+      "expected": "58492277c34923b4628eb31969b04bed859d431be96fd957fe74fc7dc5396341"
+    },
+    {
+      "name": "payload_hash_election_created",
+      "formula": "Hc(payload)",
+      "input": {
+        "config_hash": "e67d23e7820c49a8051dac2831f38290f5e72f66c8db5079eeb60d82f14894c0",
+        "window_start": "2026-11-03T09:00:00Z",
+        "window_end": "2026-11-03T11:00:00Z",
+        "time_bucket_seconds": 900,
+        "checkpoint_interval_seconds": 900,
+        "candidate_count": 3,
+        "organizations": [
+          {
+            "org_id": "org_commission",
+            "signer": "0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+          },
+          {
+            "org_id": "org_neutral",
+            "signer": "0xc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3"
+          },
+          {
+            "org_id": "org_observer",
+            "signer": "0xb2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+          }
+        ],
+        "approval_threshold": 2,
+        "proposal_ttl_hours": 24,
+        "operator_org": "org_commission",
+        "public_key_hash": "eb3102a6cb586765d01fad324523ec0bc67b9efd6a2d9589c135adfedf7922cc"
+      },
+      "expected": "f3cf32669c2bbdc1907a4ac6db472051b8f0e4aa4923fe3da34a5f7387272f7b"
+    },
+    {
+      "name": "rejection_leaf_0",
+      "formula": "Hc(9 rejection fields; subject_hash null if absent)",
+      "input": {
+        "rejection_id": "rej_11111111111111111111111111",
+        "election_id": "elc_WXWCBYB6WK952SWA0432CF1XMW",
+        "event_id": "evr_22222222222222222222222222",
+        "type": "BALLOT_RECEIVED",
+        "checkpoint": 9,
+        "reject_code": "ELECTION_NOT_OPEN",
+        "recorded_at": "2026-11-03T11:00:05Z",
+        "payload_hash": "f64551fcd6f07823cb87971cfb91446425da18286b3ab1ef935e0cbd7a69f68a",
+        "subject_hash": null
+      },
+      "expected": "2b6764fe1ba06308ccccadb0a6def0758e55bfb99c899164cf1d438139059f45"
+    },
+    {
+      "name": "rejection_leaf_1",
+      "formula": "Hc(9 rejection fields; subject_hash null if absent)",
+      "input": {
+        "rejection_id": "rej_33333333333333333333333333",
+        "election_id": "elc_WXWCBYB6WK952SWA0432CF1XMW",
+        "event_id": "evr_44444444444444444444444444",
+        "type": "TOKEN_USED",
+        "checkpoint": 9,
+        "reject_code": "DUPLICATE_CONTENT",
+        "recorded_at": "2026-11-03T11:00:06Z",
+        "payload_hash": "3946ca64ff78d93ca61090a437cbb6b3d2ca0d488f5f9ccf3059608368b27693",
+        "subject_hash": "3c469e9d6c5875d37a43f353d4f88e61fcf812c66eee3457465a40b0da4153e0"
+      },
+      "expected": "e3894d717998fca4f350df85a62cbed9c81257de5fadd8f859972a2aef85abf2"
+    },
+    {
+      "name": "rejections_root",
+      "formula": "set_root(rejection_leaf ...)",
+      "input": [
+        {
+          "rejection_id": "rej_11111111111111111111111111",
+          "election_id": "elc_WXWCBYB6WK952SWA0432CF1XMW",
+          "event_id": "evr_22222222222222222222222222",
+          "type": "BALLOT_RECEIVED",
+          "checkpoint": 9,
+          "reject_code": "ELECTION_NOT_OPEN",
+          "recorded_at": "2026-11-03T11:00:05Z",
+          "payload_hash": "f64551fcd6f07823cb87971cfb91446425da18286b3ab1ef935e0cbd7a69f68a",
+          "subject_hash": null
+        },
+        {
+          "rejection_id": "rej_33333333333333333333333333",
+          "election_id": "elc_WXWCBYB6WK952SWA0432CF1XMW",
+          "event_id": "evr_44444444444444444444444444",
+          "type": "TOKEN_USED",
+          "checkpoint": 9,
+          "reject_code": "DUPLICATE_CONTENT",
+          "recorded_at": "2026-11-03T11:00:06Z",
+          "payload_hash": "3946ca64ff78d93ca61090a437cbb6b3d2ca0d488f5f9ccf3059608368b27693",
+          "subject_hash": "3c469e9d6c5875d37a43f353d4f88e61fcf812c66eee3457465a40b0da4153e0"
+        }
+      ],
+      "expected": "9f4a3206541a217c11c476456488238bd09c655dceafc483fc0c77000141c34e"
+    },
+    {
+      "name": "rejections_root_none",
+      "formula": "H('') if no rejection",
+      "input": [],
+      "expected": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "token_hash",
+      "formula": "H(token)",
+      "input": "q2Vb3kX9mJ7pL0sT4wYz1A",
+      "expected": "f0c7912cce6ad3f00845b49466336f2be41fe3470fd1d3d1dbd3465fea6a31db"
+    },
+    {
+      "name": "nullifier_hash",
+      "formula": "H(credential)",
+      "input": "Zt8Kp2Lm9Qx4Rv7Ws1Bc3D",
+      "expected": "65e5bfc507cdd3e4c513ddbfb6ae750af2d2a5a1f8a9ee455bdca91d8498fd02"
+    },
+    {
+      "name": "ballot_hash",
+      "formula": "H(raw sealed_ballot bytes) — input is the bytes as hex",
+      "input": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f",
+      "expected": "4dbdc2b2b62cb00749785bc84202236dbc3777d74660611b8e58812f0cfde6c3"
+    },
+    {
+      "name": "receipt_hash",
+      "formula": "Hc({election_id, nullifier_hash, ballot_hash})",
+      "input": {
+        "election_id": "elc_WXWCBYB6WK952SWA0432CF1XMW",
+        "nullifier_hash": "65e5bfc507cdd3e4c513ddbfb6ae750af2d2a5a1f8a9ee455bdca91d8498fd02",
+        "ballot_hash": "4dbdc2b2b62cb00749785bc84202236dbc3777d74660611b8e58812f0cfde6c3"
+      },
+      "expected": "9ca1bd10130f6308d42910b13bbfd2914a0d7344775d2cac8ce58e9bf6394498"
+    },
+    {
+      "name": "roster_hash",
+      "formula": "set_root([H(voter_key) for ACTIVE voters])",
+      "input": [
+        "vtr_CCCCCCCCCCCCCCCCCCCCCCCCCC",
+        "vtr_BBBBBBBBBBBBBBBBBBBBBBBBBB",
+        "vtr_AAAAAAAAAAAAAAAAAAAAAAAAAA"
+      ],
+      "expected": "61412f4a03a91a1ca343d36ba393e9d33fe1cb1a72bf82b3d458eacb8697bcbe"
+    },
+    {
+      "name": "token_set_root",
+      "formula": "set_root([token_hash of tokens not revoked])",
+      "input": [
+        "628b49d96dcde97a430dd4f597705899e09a968f793491e4b704cae33a40dc02",
+        "c44474038d459e40e4714afefa7bf8dae9f9834b22f5e8ec1dd434ecb62b512e",
+        "cece8a9cecfb6c7e7ee4f3346d5e2544138bfb6e33bec6042a17333a4d3180b0"
+      ],
+      "expected": "cae0264088641893166e88eba0ecad459ae7ce4a112f02fc8d3a9ea91e354d43"
+    },
+    {
+      "name": "config_hash",
+      "formula": "Hc(config object; candidates and organizations sorted; window values at creation)",
+      "input": {
+        "title": "Student council 2026",
+        "candidates": [
+          {
+            "candidate_id": "cand_AAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "name": "Kim"
+          },
+          {
+            "candidate_id": "cand_BBBBBBBBBBBBBBBBBBBBBBBBBB",
+            "name": "Lee"
+          }
+        ],
+        "window_start": "2026-11-03T09:00:00Z",
+        "window_end": "2026-11-03T11:00:00Z",
+        "time_bucket_seconds": 900,
+        "checkpoint_interval_seconds": 900,
+        "organizations": [
+          {
+            "org_id": "org_commission",
+            "signer": "0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+          },
+          {
+            "org_id": "org_neutral",
+            "signer": "0xc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3"
+          },
+          {
+            "org_id": "org_observer",
+            "signer": "0xb2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+          }
+        ],
+        "approval_threshold": 2,
+        "proposal_ttl_hours": 24,
+        "operator_org": "org_commission",
+        "public_key_hash": "66687aadf862bd776c8fc18b8e9f8e20089714856ee233b3902a591d0d5f2925"
+      },
+      "expected": "afc6f33dd2f8cb2a8586f13c5c8209c4f786ad1a44b9f30c4c356c31b1d9f2db"
+    },
+    {
+      "name": "target_hash_ROSTER_AMEND",
+      "formula": "Hc({election_id, action_id, action_type, target})",
+      "input": {
+        "election_id": "elc_WXWCBYB6WK952SWA0432CF1XMW",
+        "action_id": "act_00000000000000000000000000",
+        "action_type": "ROSTER_AMEND",
+        "target": {
+          "add": [
+            "vtr_DDDDDDDDDDDDDDDDDDDDDDDDDD"
+          ],
+          "remove": []
+        }
+      },
+      "expected": "ee044f53b55e4c3393b0317061d0130a3d66ba67a91f5f7542943316751f8e36"
+    },
+    {
+      "name": "target_hash_TOKEN_REISSUE",
+      "formula": "Hc({election_id, action_id, action_type, target})",
+      "input": {
+        "election_id": "elc_WXWCBYB6WK952SWA0432CF1XMW",
+        "action_id": "act_00000000000000000000000000",
+        "action_type": "TOKEN_REISSUE",
+        "target": {
+          "voter_keys": [
+            "vtr_AAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ]
+        }
+      },
+      "expected": "13175d2f24ff500440608e828f98cfe5620246afc366ef0827af6458dfbcbda5"
+    },
+    {
+      "name": "target_hash_WINDOW_CHANGE",
+      "formula": "Hc({election_id, action_id, action_type, target})",
+      "input": {
+        "election_id": "elc_WXWCBYB6WK952SWA0432CF1XMW",
+        "action_id": "act_00000000000000000000000000",
+        "action_type": "WINDOW_CHANGE",
+        "target": {
+          "new_window_end": "2026-11-03T11:30:00Z"
+        }
+      },
+      "expected": "cc8adf652dbf21e6db4a9b4fad51146de6e86e66ef5bc1784d6eae584eda2d9d"
+    },
+    {
+      "name": "target_hash_ELECTION_CLOSE_EARLY",
+      "formula": "Hc({election_id, action_id, action_type, target})",
+      "input": {
+        "election_id": "elc_WXWCBYB6WK952SWA0432CF1XMW",
+        "action_id": "act_00000000000000000000000000",
+        "action_type": "ELECTION_CLOSE_EARLY",
+        "target": {
+          "closed_at": "2026-11-03T10:30:00Z"
+        }
+      },
+      "expected": "95b5cc61aa4c618989a78d8dbf94bb0f93b20062a474fc05980850722aabf754"
+    },
+    {
+      "name": "target_hash_ELECTION_VOID",
+      "formula": "Hc({election_id, action_id, action_type, target})",
+      "input": {
+        "election_id": "elc_WXWCBYB6WK952SWA0432CF1XMW",
+        "action_id": "act_00000000000000000000000000",
+        "action_type": "ELECTION_VOID",
+        "target": {
+          "finding_ids": []
+        }
+      },
+      "expected": "ea1f75dfce4dbd8b0b3ca6eac062fb968016e58acfba4670075f88a46252ef5a"
+    },
+    {
+      "name": "ballot_set_root_duplicates",
+      "formula": "merkle_root(sorted ballot_hash, duplicates KEPT) — formula only",
+      "input": [
+        "4814d92093ac8a0f4a2163ab87dee509ba306a58f5888be0edcb2fcd0712028b",
+        "7dc96f776c8423e57a2785489a3f9c43fb6e756876d6ad9a9cac4aa4e72ec193",
+        "4814d92093ac8a0f4a2163ab87dee509ba306a58f5888be0edcb2fcd0712028b"
+      ],
+      "expected": "2f4af03755f12cdbc9a71c9941066de8cb3d7e9f0e2d19eaa727f40a099725a4"
+    },
+    {
+      "name": "result_hash",
+      "formula": "Hc(result object; every candidate incl. 0 votes, sorted) — consistent tally: 3 accepted ballots, b3 invalid",
+      "input": {
+        "election_id": "elc_WXWCBYB6WK952SWA0432CF1XMW",
+        "final_checkpoint": 9,
+        "results": [
+          {
+            "candidate_id": "cand_AAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "votes": 1
+          },
+          {
+            "candidate_id": "cand_BBBBBBBBBBBBBBBBBBBBBBBBBB",
+            "votes": 1
+          },
+          {
+            "candidate_id": "cand_CCCCCCCCCCCCCCCCCCCCCCCCCC",
+            "votes": 0
+          }
+        ],
+        "ballot_count": 2,
+        "invalid_ballots": 1,
+        "invalid_ballot_hashes": [
+          "76a8277347f52530e1cf979175a178980b3a180d176165c985d85f7e142f1eed"
+        ],
+        "excluded_ballots": 0,
+        "ballot_set_root": "517d33e4456441c0251f583bc4de880afb0a703f5bd5ca0690af42535fa77551"
+      },
+      "expected": "df7e4edef606fd3ace9f8993d721266234c2e7245f522b6ce5a94581f925eef2"
+    },
+    {
+      "name": "snapshot_hash_roster",
+      "formula": "Hc(all rows as of k, sorted by row_key; rows exactly as returned by GET /internal/v1/views/roster, schema-validated)",
+      "input": [
+        {
+          "view": "roster",
+          "row_key": "vtr_AAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "status": "ACTIVE",
+          "added_checkpoint": 0,
+          "removed_checkpoint": null
+        },
+        {
+          "view": "roster",
+          "row_key": "vtr_BBBBBBBBBBBBBBBBBBBBBBBBBB",
+          "status": "REMOVED",
+          "added_checkpoint": 0,
+          "removed_checkpoint": 3
+        }
+      ],
+      "expected": "693b0f10cdb930f61c44808c4c4617aad9578afe0eb538e9a712b9cc8fac0047"
+    },
+    {
+      "name": "snapshot_hash_ballot_receipts",
+      "formula": "Hc(all rows as of k, sorted by row_key; sealed_ballot = RFC 4648 standard base64 with padding; schema-validated)",
+      "input": [
+        {
+          "view": "ballot_receipts",
+          "row_key": "d9b90742146dc28626b7ac4ea88a3e2edfa2ad73830cf226e4b327375a13dcf1",
+          "ballot_hash": "4dbdc2b2b62cb00749785bc84202236dbc3777d74660611b8e58812f0cfde6c3",
+          "sealed_ballot": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4v",
+          "receipt_hash": "64cf34bb50a063ce7fb00e79faff5c889a69bde12cff5179f1da5880ff52368d",
+          "received_checkpoint": 2,
+          "received_bucket": "2026-11-03T09:15:00Z",
+          "event_id": "evr_77777777777777777777777777"
+        },
+        {
+          "view": "ballot_receipts",
+          "row_key": "eae75a514c751876c3e660a8dffaa206f88dc17800f52e4c08b7f0524c03a171",
+          "ballot_hash": "1f997e5f0971a23047ffb591147ad709e8d9e8f59745ce44641db1056dea6a82",
+          "sealed_ballot": "ZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXp7fH1+f4CBgoOEhYaHiImKi4yNjo+QkZI=",
+          "receipt_hash": "f74ec687a2ea69319caa6c865ca2fa0fe59fa85163504a009c2409e4246962b2",
+          "received_checkpoint": 2,
+          "received_bucket": "2026-11-03T09:15:00Z",
+          "event_id": "evr_88888888888888888888888888"
+        }
+      ],
+      "expected": "fc7766b87afccbaa4db47de016600a8d4debdde6628a630d5e2c42fe32281d3e"
+    },
+    {
+      "name": "idh",
+      "formula": "sha256(utf8(id)) as hex — also the bytes32 ID on chain",
+      "input": "org_observer",
+      "expected": "a2d53d828cd5828de14bfcebec21d050489fc0615658e08e2425ed6f6338ba96"
+    },
+    {
+      "name": "request_digest",
+      "formula": "PV2-PROPOSAL-v1 layout, decision 0",
+      "input": [
+        "prp_00000000000000000000000000",
+        "act_00000000000000000000000000",
+        "elc_00000000000000000000000000",
+        "TOKEN_REISSUE",
+        "e3b98a4da31a127d4bde6e43033f66ba274cab0eb7eb1c70ec41402bf6273dd8",
+        "org_observer",
+        0
+      ],
+      "expected": "48b2b3d9b9fcc165ca7f4e9c9cf7256d83a533473bd65d6aa0fe100ad5538de5"
+    },
+    {
+      "name": "approval_digest",
+      "formula": "PV2-PROPOSAL-v1 layout, decision 1 (= SIG_DIGEST_VECTOR)",
+      "input": [
+        "prp_00000000000000000000000000",
+        "act_00000000000000000000000000",
+        "elc_00000000000000000000000000",
+        "TOKEN_REISSUE",
+        "e3b98a4da31a127d4bde6e43033f66ba274cab0eb7eb1c70ec41402bf6273dd8",
+        "org_observer",
+        1
+      ],
+      "expected": "a3691bc6701ccde00105461c30098ba35b6ea23dbd64c58da2630fd2ccbb7344"
+    },
+    {
+      "name": "finding_record_digest",
+      "formula": "PV2-FINDING-v1 layout (= FINDING_DIGEST_VECTOR)",
+      "input": [
+        "fnd_00000000000000000000000000",
+        "elc_00000000000000000000000000",
+        3,
+        1,
+        4,
+        "252f10c83610ebca1a059c0bae8255eba2f95be4d1d7bcfa89d7248a82d9f111"
+      ],
+      "expected": "352c41ba0c51b025df9afd982471d2d9265a60ec0ce2174ba208c64f87197084"
+    },
+    {
+      "name": "review_digest",
+      "formula": "PV2-REVIEW-v1 layout (= REVIEW_DIGEST_VECTOR)",
+      "input": [
+        "fnd_00000000000000000000000000",
+        "elc_00000000000000000000000000",
+        "252f10c83610ebca1a059c0bae8255eba2f95be4d1d7bcfa89d7248a82d9f111",
+        "org_neutral",
+        1,
+        "1b16b1df538ba12dc3f97edbb85caa7050d46c148134290feba80f8236c83db9"
+      ],
+      "expected": "d77077ead937e26bb2c4d11638bdd560d59002dd5a4f28ec44e65dfcc238b9f4"
+    }
+  ]
+}
