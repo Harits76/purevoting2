@@ -61,6 +61,12 @@ contract PureVotingLedger {
     error FindingConflict();
     error CheckpointNotCommitted();
     error InvalidFinding();
+    error ResultHashMismatch();
+    error TallyCheckpointMissing();
+    error TallyCheckpointAlreadyCommitted();
+    error FindingsMissing();
+    error FindingsUnresolved();
+    error FindingConfirmedIssue();
 
     // ------------------------------------------------------------------ events
     event StateChanged(bytes32 indexed electionId, uint8 status, uint64 coreSeq);
@@ -121,6 +127,8 @@ contract PureVotingLedger {
         uint64 lastCheckpoint;
         bool hasCloseFinal;           // a checkpoint with reason CLOSE_FINAL (2) was committed
         uint64 closeFinalCheckpoint;
+        bool hasTallyCheckpoint;      // a checkpoint with reason TALLY (3) was committed (only while TALLIED)
+        uint64 tallyCheckpoint;
         uint64 lastCoreSeq;
         bytes32 operatorOrgId;
         uint8 approvalThreshold;
@@ -141,6 +149,7 @@ contract PureVotingLedger {
         uint8 status;   // 0 NOT_REQUIRED, 1 PENDING, 2 RESOLVED, 3 SUPERSEDED, 4 CONFIRMED_ISSUE
     }
     mapping(bytes32 => Finding) private _findings;
+    mapping(bytes32 => bytes32[]) private _findingsOf;   // electionId => finding ids in record order
 
     /// @dev The arguments of submitFindingRecord / relayFindingRecord in memory (keeps the stack small).
     struct FindingArgs {
@@ -390,12 +399,22 @@ contract PureVotingLedger {
             if (e.status != CLOSED) revert InvalidStateTransition();
             if (e.hasCloseFinal) revert CloseFinalAlreadyCommitted();
         }
+        // reason TALLY: the single checkpoint that follows an accepted tally (README: CLOSED -> TALLIED commits one
+        // checkpoint with reason TALLY); finalizeElection refers to it (proposed, ledger/DECISIONS.md G18)
+        if (reason == 3) {
+            if (e.status != TALLIED) revert InvalidStateTransition();
+            if (e.hasTallyCheckpoint) revert TallyCheckpointAlreadyCommitted();
+        }
         _advanceSeq(e, coreSeq);
         e.hasCheckpoint = true;
         e.lastCheckpoint = checkpoint;
         if (reason == 2) {
             e.hasCloseFinal = true;
             e.closeFinalCheckpoint = checkpoint;
+        }
+        if (reason == 3) {
+            e.hasTallyCheckpoint = true;
+            e.tallyCheckpoint = checkpoint;
         }
         // the snapshot includes this event's own seq (assumption, see report)
         e.snapshots[checkpoint] = Snapshot({
@@ -453,6 +472,22 @@ contract PureVotingLedger {
         emit StateChanged(electionId, TALLIED, coreSeq);
     }
 
+    /// @dev TALLIED -> FINALIZED (README "Election lifecycle"): resultHash equals the published tally, the TALLY
+    ///      checkpoint exists, a finding of each of R1 to R5 is recorded at it, and every FAIL / INCONCLUSIVE finding
+    ///      of the election is RESOLVED or SUPERSEDED (none CONFIRMED_ISSUE). Reviews arrive with submitFindingReview
+    ///      (week of Nov 23); until then a FAIL finding blocks finalization, and so does an INCONCLUSIVE one until a
+    ///      later PASS supersedes it. The loop is bounded by 5 rules x checkpoints of one election.
+    function finalizeElection(bytes32 electionId, bytes32 resultHash, uint64 coreSeq) external onlyGateway {
+        Election storage e = _get(electionId);
+        if (e.status != TALLIED) revert InvalidStateTransition();
+        if (resultHash != e.resultHash) revert ResultHashMismatch();
+        if (!e.hasTallyCheckpoint) revert TallyCheckpointMissing();
+        _requireFindingsFinal(electionId, e.tallyCheckpoint);
+        _advanceSeq(e, coreSeq);
+        e.status = FINALIZED;
+        emit StateChanged(electionId, FINALIZED, coreSeq);
+    }
+
     // ================================================================== finding records
     function findingRecord(bytes32 findingId) external view returns (
         bytes32 electionId, bytes32 findingHash, uint8 ruleId, uint8 result, uint64 findingCheckpoint, uint8 status
@@ -500,6 +535,8 @@ contract PureVotingLedger {
         f.result = a.result;
         f.findingCheckpoint = a.findingCheckpoint;
         f.status = a.result == 0 ? 0 : 1;   // PASS needs no review; FAIL / INCONCLUSIVE are PENDING until reviewed
+        if (a.result == 0) _supersede(a.electionId, a.ruleId, a.findingCheckpoint);
+        _findingsOf[a.electionId].push(a.findingId);
         emit FindingRecorded(a.findingId, a.electionId, a.ruleId, a.result, a.findingCheckpoint, a.findingHash,
             a.signature, a.findingIdText, a.electionIdText);
     }
@@ -526,6 +563,34 @@ contract PureVotingLedger {
         Item storage g = _items[ITEM_GATEWAY];
         if (!_all(ITEM_GATEWAY) || msg.sender != address(uint160(uint256(g.value)))) revert NotGateway();
         _;
+    }
+
+    /// @dev A PASS of rule r at checkpoint c supersedes every still-PENDING INCONCLUSIVE finding of the same rule at a
+    ///      checkpoint <= c (README "Review and supersession": a strictly higher checkpoint, or the same checkpoint
+    ///      recorded later, which holds because the earlier finding was recorded first). FAIL findings are never
+    ///      superseded; RESOLVED and CONFIRMED_ISSUE are left as they are.
+    function _supersede(bytes32 electionId, uint8 ruleId, uint64 checkpoint) private {
+        bytes32[] storage ids = _findingsOf[electionId];
+        for (uint256 i = 0; i < ids.length; i++) {
+            Finding storage f = _findings[ids[i]];
+            if (f.ruleId == ruleId && f.result == 2 && f.status == 1 && f.findingCheckpoint <= checkpoint) {
+                f.status = 3;
+            }
+        }
+    }
+
+    function _requireFindingsFinal(bytes32 electionId, uint64 tallyCheckpoint) private view {
+        bytes32[] storage ids = _findingsOf[electionId];
+        uint8 seen;          // bit r is set when a finding of rule r exists at the TALLY checkpoint
+        bool pending;
+        for (uint256 i = 0; i < ids.length; i++) {
+            Finding storage f = _findings[ids[i]];
+            if (f.status == 4) revert FindingConfirmedIssue();
+            if (f.status == 1) pending = true;
+            if (f.findingCheckpoint == tallyCheckpoint) seen |= uint8(1) << f.ruleId;
+        }
+        if (seen != 62) revert FindingsMissing();     // bits 1 to 5
+        if (pending) revert FindingsUnresolved();
     }
 
     function _get(bytes32 electionId) private view returns (Election storage e) {
