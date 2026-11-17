@@ -5,7 +5,8 @@
 Needs the same setup as test_gateway_e2e.py and the contract of this change deployed. It runs one election through
 open, early close (ALL_VOTED), CLOSE_FINAL, TALLY_PUBLISHED, then checks that ELECTION_FINALIZED is refused until the
 TALLY checkpoint exists, a finding of each of R1 to R5 is recorded at it, and every INCONCLUSIVE finding is superseded
-by a later PASS; a wrong result_hash is refused; the correct request is accepted, anchored, and the state is FINALIZED.
+by a later PASS (and, in the other order, at once when it is recorded after a PASS at a higher checkpoint);
+finalize refusals are INVALID_STATE_TRANSITION with the revert name in detail; a wrong result_hash is refused; the correct request is accepted, anchored, and the state is FINALIZED.
 About 70 s.
 """
 import argparse
@@ -93,12 +94,13 @@ def main():
 
     # ---- no findings yet
     r = finalize(result_hash, "no findings")
-    check("finalize without findings is REJECTED FINDING_NOT_RECORDED",
-          r["status"] == "REJECTED" and r.get("reject_code") == "FINDING_NOT_RECORDED", r)
+    check("finalize without findings is REJECTED INVALID_STATE_TRANSITION (FindingsMissing)",
+          r["status"] == "REJECTED" and r.get("reject_code") == "INVALID_STATE_TRANSITION"
+          and "FindingsMissing" in r.get("detail", ""), r)
 
     # ---- R1 to R4 PASS, R5 INCONCLUSIVE at the TALLY checkpoint
-    def record(rule, result, label):
-        body = f.finding_body(priv, el, t.rid("fnd_"), rule, result, 2, pv_hash.H(label))
+    def record(rule, result, label, checkpoint=2):
+        body = f.finding_body(priv, el, t.rid("fnd_"), rule, result, checkpoint, pv_hash.H(label))
         st, out = f.post_until(gw, body, rule_key)
         check(f"finding {rule} {result} recorded (200 or 201)", st in (200, 201) and "event_id" in out, (st, out))
         return body["finding_id"]
@@ -107,8 +109,9 @@ def main():
         record(rule, "PASS", f"{rule}-pass")
     inc = record("R5", "INCONCLUSIVE", "R5-inconclusive")
     r = finalize(result_hash, "pending INCONCLUSIVE")
-    check("finalize with an unresolved INCONCLUSIVE finding is REJECTED FINDINGS_UNREVIEWED",
-          r["status"] == "REJECTED" and r.get("reject_code") == "FINDINGS_UNREVIEWED", r)
+    check("finalize with an unresolved INCONCLUSIVE finding is REJECTED INVALID_STATE_TRANSITION (FindingsUnresolved)",
+          r["status"] == "REJECTED" and r.get("reject_code") == "INVALID_STATE_TRANSITION"
+          and "FindingsUnresolved" in r.get("detail", ""), r)
     st, fl = gw.get(f"/v1/finding-records?election_id={el}")
     by_id = {x["finding_id"]: x for x in fl.get("items", [])}
     check("the INCONCLUSIVE finding is PENDING", by_id.get(inc, {}).get("contract_status") == "PENDING", fl)
@@ -120,6 +123,13 @@ def main():
     check("the INCONCLUSIVE finding is SUPERSEDED by the later PASS",
           by_id.get(inc, {}).get("contract_status") == "SUPERSEDED"
           and by_id.get(ok5, {}).get("contract_status") == "NOT_REQUIRED", fl)
+
+    # ---- reverse direction: an INCONCLUSIVE of R5 at checkpoint 1 recorded after the PASS at checkpoint 2 is superseded at once
+    late = record("R5", "INCONCLUSIVE", "R5-inconclusive-late", checkpoint=1)
+    st, fl = gw.get(f"/v1/finding-records?election_id={el}")
+    by_id = {x["finding_id"]: x for x in fl.get("items", [])}
+    check("an INCONCLUSIVE recorded after a PASS at a higher checkpoint is SUPERSEDED at once",
+          by_id.get(late, {}).get("contract_status") == "SUPERSEDED", fl)
 
     # ---- result_hash must equal the tally
     r = finalize(pv_hash.H("another result"), "wrong hash")

@@ -536,6 +536,7 @@ contract PureVotingLedger {
         f.findingCheckpoint = a.findingCheckpoint;
         f.status = a.result == 0 ? 0 : 1;   // PASS needs no review; FAIL / INCONCLUSIVE are PENDING until reviewed
         if (a.result == 0) _supersede(a.electionId, a.ruleId, a.findingCheckpoint);
+        else if (a.result == 2 && _hasHigherPass(a.electionId, a.ruleId, a.findingCheckpoint)) f.status = 3;   // SUPERSEDED at once
         _findingsOf[a.electionId].push(a.findingId);
         emit FindingRecorded(a.findingId, a.electionId, a.ruleId, a.result, a.findingCheckpoint, a.findingHash,
             a.signature, a.findingIdText, a.electionIdText);
@@ -569,6 +570,17 @@ contract PureVotingLedger {
     ///      checkpoint <= c (README "Review and supersession": a strictly higher checkpoint, or the same checkpoint
     ///      recorded later, which holds because the earlier finding was recorded first). FAIL findings are never
     ///      superseded; RESOLVED and CONFIRMED_ISSUE are left as they are.
+    /// @dev true when a PASS of the same rule exists at a strictly higher checkpoint (the worker re-evaluates old
+    ///      checkpoints, so an INCONCLUSIVE can arrive after the PASS that already covers it). FAIL is never superseded.
+    function _hasHigherPass(bytes32 electionId, uint8 ruleId, uint64 checkpoint) private view returns (bool) {
+        bytes32[] storage ids = _findingsOf[electionId];
+        for (uint256 i = 0; i < ids.length; i++) {
+            Finding storage g = _findings[ids[i]];
+            if (g.ruleId == ruleId && g.result == 0 && g.findingCheckpoint > checkpoint) return true;
+        }
+        return false;
+    }
+
     function _supersede(bytes32 electionId, uint8 ruleId, uint64 checkpoint) private {
         bytes32[] storage ids = _findingsOf[electionId];
         for (uint256 i = 0; i < ids.length; i++) {

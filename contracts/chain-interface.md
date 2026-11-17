@@ -115,6 +115,9 @@ interface IPureVotingLedger {
         // commit was rejected is skipped, so gaps only occur after rejections)
         // reason 0 PERIODIC, 1 STATE_CHANGE, 2 CLOSE_FINAL, 3 TALLY (lets the contract identify the TALLY checkpoint); tablesHash = Hc(payload.tables)
         // CLOSED→TALLIED commits one checkpoint with reason TALLY (not an extra STATE_CHANGE)
+        // reason TALLY: only while status == TALLIED and at most once per election (a second one reverts
+        // TallyCheckpointAlreadyCommitted); finalizeElection uses this checkpoint. If the TALLY checkpoint is rejected,
+        // Core stays TALLIED without a TALLY checkpoint, finalizeElection cannot succeed, and only ELECTION_VOID remains.
         // reason CLOSE_FINAL: at most once per election and only while status == CLOSED (v1.1). Consequence: if
         // ELECTION_CLOSED was rejected, Core stays CLOSED (strict) but its CLOSE_FINAL is rejected too, so no tally is
         // possible and ELECTION_VOID is the only exit (README state machine) — intended
@@ -240,7 +243,7 @@ A block can be replaced by a fork on the chosen platform, so being included in a
   applied at most once. A retry after a confirmed revert (e.g. TimeNotReached) is a new transaction; the Gateway should
   check time preconditions with `eth_call` first and answer RETRY_LATER without mining a revert.
 - **"Already applied" reverts.** If a call reverts because its effect may already be on chain (ElectionExists,
-  SeqNotIncreasing, CloseFinalAlreadyCommitted), the Gateway answers ACCEPTED / DUPLICATE only on an **exact match** in
+  SeqNotIncreasing, CloseFinalAlreadyCommitted, TallyCheckpointAlreadyCommitted), the Gateway answers ACCEPTED / DUPLICATE only on an **exact match** in
   confirmed state, otherwise REJECTED: state events — a confirmed StateChanged with coreSeq equal to the event's seq;
   ELECTION_CREATED — the election exists with the same configHash and creation fields; checkpoints —
   `electionStateAtCheckpoint(k).lastCoreSeq` equals the event's seq. (A repeated commitAnchor with identical fields does

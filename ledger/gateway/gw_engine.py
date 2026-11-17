@@ -65,11 +65,7 @@ def now_iso():
 def problem_code_for(revert_name):
     if revert_name in ORG_REVERTS:
         return "ORG_NOT_REGISTERED"
-    if revert_name in ("FindingsUnresolved", "FindingConfirmedIssue"):
-        return "FINDINGS_UNREVIEWED"
-    if revert_name == "FindingsMissing":
-        return "FINDING_NOT_RECORDED"
-    return "INVALID_STATE_TRANSITION"
+    return "INVALID_STATE_TRANSITION"      # chain-interface.md: the revert name goes into the rejection detail
 
 
 def _raw_nonce(raw):
