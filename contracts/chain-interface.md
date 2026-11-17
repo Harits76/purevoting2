@@ -299,7 +299,12 @@ therefore never causes a mismatch, and re-running an old checkpoint gives the sa
 
 Only confirmed chain data counts ("Confirmations"). Anchors are enumerated from the Gateway list (`/v1/anchors`, each with
 its block_number), not by index: `anchorAt` has no block number and `anchorCount` may include unconfirmed anchors. An
-on-chain anchor missing from the Gateway list is a mismatch only when its AnchorCommitted log is in a confirmed block.
+on-chain anchor missing from the Gateway list is a mismatch only when its AnchorCommitted log is in a confirmed block
+and it is still missing from a complete Gateway list read that starts at least 2 × batch interval + 60 s after the Rule
+Engine first saw it missing (same length as the README "Audit rules" timeout; the Gateway's own node and poller can be
+behind the pinned node). Until then it is INCONCLUSIVE (`BATCH_NOT_ANCHORED`); a later complete list that shows it clears the case. Likewise, an event that the
+Rule Engine read as PENDING before it read the chain is not available (`BATCH_NOT_ANCHORED`), not a mismatch; the
+checks on its body, leaf_hash and Merkle root still apply.
 For every anchor of the election: read `anchorAt` from the pinned node ("Pinned chain configuration"; `rpc_urls` from the
 Gateway only for comparison), recompute `merkle_root` from `GET /v1/anchors/{id}/leaves` + the events and `rejections_root` from
 `GET /v1/rejections`, and compare with the on-chain values. Any difference → R5 FAIL. No node reachable → INCONCLUSIVE
