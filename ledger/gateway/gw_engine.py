@@ -31,9 +31,9 @@ ZERO32 = "0x" + "00" * 32
 STATUS_NAMES = ["DRAFT", "ROSTER_FROZEN", "OPEN", "CLOSED", "TALLIED", "FINALIZED", "VOIDED"]
 VOTER_TYPES = ("TOKEN_USED", "BALLOT_RECEIVED")
 SYSTEM_TYPES = ("ELECTION_CREATED", "ROSTER_FROZEN", "TOKEN_BATCH_ISSUED", "ELECTION_OPENED", "ELECTION_CLOSED",
-                "CHECKPOINT_COMMITTED", "TALLY_PUBLISHED")
+                "CHECKPOINT_COMMITTED", "TALLY_PUBLISHED", "ELECTION_FINALIZED")
 CHECKPOINT_REASON = {"PERIODIC": 0, "STATE_CHANGE": 1, "CLOSE_FINAL": 2, "TALLY": 3}
-ALREADY_APPLIED = ("ElectionExists", "SeqNotIncreasing", "CloseFinalAlreadyCommitted")
+ALREADY_APPLIED = ("ElectionExists", "SeqNotIncreasing", "CloseFinalAlreadyCommitted", "TallyCheckpointAlreadyCommitted")
 RETRY_REVERTS = ("TimeNotReached", "NotGateway")
 ORG_REVERTS = ("OrgNotRegistered", "OperatorOrgMismatch")
 
@@ -63,7 +63,9 @@ def now_iso():
 
 
 def problem_code_for(revert_name):
-    return "ORG_NOT_REGISTERED" if revert_name in ORG_REVERTS else "INVALID_STATE_TRANSITION"
+    if revert_name in ORG_REVERTS:
+        return "ORG_NOT_REGISTERED"
+    return "INVALID_STATE_TRANSITION"      # chain-interface.md: the revert name goes into the rejection detail
 
 
 def _raw_nonce(raw):
@@ -421,6 +423,8 @@ class Engine:
                                         gw_abi.hex32(pv_hash.Hc(p["tables"])), seq]
         if t == "TALLY_PUBLISHED":
             return "publishTally", [el, gw_abi.hex32(p["result_hash"]), p["final_checkpoint"], seq]
+        if t == "ELECTION_FINALIZED":
+            return "finalizeElection", [el, gw_abi.hex32(p["result_hash"]), seq]
         if t == "FINDING_RECORDED":
             return "relayFindingRecord", [gw_abi.idh(p["finding_id"]), el, RULE_CODE[p["rule_id"]],
                                           RESULT_CODE[p["result"]], p["finding_checkpoint"],
