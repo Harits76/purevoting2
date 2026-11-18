@@ -115,6 +115,9 @@ interface IPureVotingLedger {
         // commit was rejected is skipped, so gaps only occur after rejections)
         // reason 0 PERIODIC, 1 STATE_CHANGE, 2 CLOSE_FINAL, 3 TALLY (lets the contract identify the TALLY checkpoint); tablesHash = Hc(payload.tables)
         // CLOSED→TALLIED commits one checkpoint with reason TALLY (not an extra STATE_CHANGE)
+        // reason TALLY: only while status == TALLIED and at most once per election (a second one reverts
+        // TallyCheckpointAlreadyCommitted); finalizeElection uses this checkpoint. If the TALLY checkpoint is rejected,
+        // Core stays TALLIED without a TALLY checkpoint, finalizeElection cannot succeed, and only ELECTION_VOID remains.
         // reason CLOSE_FINAL: at most once per election and only while status == CLOSED (v1.1). Consequence: if
         // ELECTION_CLOSED was rejected, Core stays CLOSED (strict) but its CLOSE_FINAL is rejected too, so no tally is
         // possible and ELECTION_VOID is the only exit (README state machine) — intended
@@ -240,7 +243,7 @@ A block can be replaced by a fork on the chosen platform, so being included in a
   applied at most once. A retry after a confirmed revert (e.g. TimeNotReached) is a new transaction; the Gateway should
   check time preconditions with `eth_call` first and answer RETRY_LATER without mining a revert.
 - **"Already applied" reverts.** If a call reverts because its effect may already be on chain (ElectionExists,
-  SeqNotIncreasing, CloseFinalAlreadyCommitted), the Gateway answers ACCEPTED / DUPLICATE only on an **exact match** in
+  SeqNotIncreasing, CloseFinalAlreadyCommitted, TallyCheckpointAlreadyCommitted), the Gateway answers ACCEPTED / DUPLICATE only on an **exact match** in
   confirmed state, otherwise REJECTED: state events — a confirmed StateChanged with coreSeq equal to the event's seq;
   ELECTION_CREATED — the election exists with the same configHash and creation fields; checkpoints —
   `electionStateAtCheckpoint(k).lastCoreSeq` equals the event's seq. (A repeated commitAnchor with identical fields does
@@ -299,7 +302,12 @@ therefore never causes a mismatch, and re-running an old checkpoint gives the sa
 
 Only confirmed chain data counts ("Confirmations"). Anchors are enumerated from the Gateway list (`/v1/anchors`, each with
 its block_number), not by index: `anchorAt` has no block number and `anchorCount` may include unconfirmed anchors. An
-on-chain anchor missing from the Gateway list is a mismatch only when its AnchorCommitted log is in a confirmed block.
+on-chain anchor missing from the Gateway list is a mismatch only when its AnchorCommitted log is in a confirmed block
+and it is still missing from a complete Gateway list read that starts at least 2 × batch interval + 60 s after the Rule
+Engine first saw it missing (same length as the README "Audit rules" timeout; the Gateway's own node and poller can be
+behind the pinned node). Until then it is INCONCLUSIVE (`BATCH_NOT_ANCHORED`); a later complete list that shows it clears the case. Likewise, an event that the
+Rule Engine read as PENDING before it read the chain is not available (`BATCH_NOT_ANCHORED`), not a mismatch; the
+checks on its body, leaf_hash and Merkle root still apply.
 For every anchor of the election: read `anchorAt` from the pinned node ("Pinned chain configuration"; `rpc_urls` from the
 Gateway only for comparison), recompute `merkle_root` from `GET /v1/anchors/{id}/leaves` + the events and `rejections_root` from
 `GET /v1/rejections`, and compare with the on-chain values. Any difference → R5 FAIL. No node reachable → INCONCLUSIVE
