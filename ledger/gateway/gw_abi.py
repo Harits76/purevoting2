@@ -22,6 +22,7 @@ FUNCS = {
     "commitCheckpoint": (["bytes32", "uint64", "uint8", "bytes32", "uint64"], []),
     "commitAnchor": (["bytes32", "bytes32", "bytes32", "bytes32", "uint8", "uint32", "uint64", "uint64"], []),
     "publishTally": (["bytes32", "bytes32", "uint64", "uint64"], []),
+    "finalizeElection": (["bytes32", "bytes32", "uint64"], []),
     "relayFindingRecord": (["bytes32", "bytes32", "uint8", "uint8", "uint64", "bytes32", "bytes", "string", "string"], []),
     # reads
     "electionState": (["bytes32"], ["uint8", "uint64", "uint64", "uint32", "bytes32", "bytes32", "bytes32", "bytes32", "uint64", "uint64", "bytes32"]),
@@ -46,6 +47,8 @@ ERRORS = [
     "CheckpointNotIncreasing", "InvalidReason", "EarlyCloseNotImplemented", "InvalidMode", "InvalidBuckets",
     "AnchorConflict", "AnchorBeyondWindowEnd", "IndexOutOfRange", "InvalidFinalCheckpoint",
     "CloseFinalAlreadyCommitted", "SignatureInvalid", "FindingConflict", "CheckpointNotCommitted", "InvalidFinding",
+    "ResultHashMismatch", "TallyCheckpointMissing", "TallyCheckpointAlreadyCommitted", "FindingsMissing",
+    "FindingsUnresolved", "FindingConfirmedIssue",
 ]
 
 
