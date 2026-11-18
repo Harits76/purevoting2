@@ -18,18 +18,26 @@ The labels were NOT derived from rules/ (Anik's code) or from any run. Every var
 
 ## Conditions the setup (Sumin) must meet, otherwise the label does not apply
 
-- **T02:** the first redeem of the link succeeds (200); the second redeem of the same link is answered 409
-  TOKEN_ALREADY_USED and recorded in `rejected_attempts`, and it happens before the judged checkpoint C is committed
-  (otherwise its row has a checkpoint > C and `refused_duplicates` is 0 at C). Nothing else is refused in this variant.
-- **T04-core:** at least one refused attempt happens **before window_start** (redeem or ballot, 409 ELECTION_NOT_OPEN
-  at Core). Such an attempt has Core's checkpoint 0, so it is counted at every C. An attempt after the end may be added,
-  but its checkpoint can exceed C, so the label rests on the before-start attempt only. No other refusal (no duplicate
-  link use) happens in this variant, and no event reaches the Gateway outside the window.
+- **T02:** the first redeem of the link succeeds (200); the second redeem of the same link happens **inside the voting
+  window** and is answered 409 TOKEN_ALREADY_USED. (Core checks the window first, voting.py:26: a second redeem outside
+  the window is refused for the window, not as a duplicate, and `refused_duplicates` stays 0.) The attempt is recorded in
+  `rejected_attempts` and happens before the judged checkpoint C is committed (otherwise its row has a checkpoint > C and
+  `refused_duplicates` is 0 at C). Nothing else is refused in this variant.
+- **T04-core:** at least one refused attempt happens **before window_start**, and it must be a **redeem** (409
+  ELECTION_NOT_OPEN at Core). A ballot before the start gets CREDENTIAL_UNKNOWN 403, because Core's credential check
+  (voting.py:70) runs before the window check (voting.py:71), so it never reaches the window rule. A redeem before the
+  start is recorded at Core's open checkpoint (1 after the freeze; 0 only before the freeze), so its checkpoint is <= C
+  and it is counted at every C. An attempt after the end may be added, but only as a **redeem with an unused link**: its
+  checkpoint is then greater than C, so it does not change the label. (A ballot after the end can leave
+  `redeemed_not_voted` behind, and a link that was already used gets CREDENTIAL_ALREADY_USED, not the window refusal.)
+  The label rests on the before-start redeem. No other refusal (no duplicate link use) happens in this variant, and no
+  event reaches the Gateway outside the window.
 - **T04-lastbucket:** one voter's ballot has `occurred_at` in the last bucket of the window
   (`occurred_at + time_bucket_seconds = effective_end` exactly) and is accepted (201). No refusal in this variant.
-- **T04-injected:** exactly one voter event (TOKEN_USED or BALLOT_RECEIVED) is written into the Core outbox with a
-  bucketed `occurred_at` outside the window (before `window_start` or at or after `effective_end`), a valid
-  `payload_hash`, a key field, and **a checkpoint number <= C and <= the CLOSE_FINAL checkpoint**; the Gateway rejects
+- **T04-injected:** exactly one voter event (TOKEN_USED or BALLOT_RECEIVED) is written into the Core outbox with
+  `time_precision: "bucketed"` and an `occurred_at` that is a multiple of `time_bucket_seconds`, outside the window
+  (before `window_start` or at or after `effective_end`; otherwise the Gateway rejects it with VALIDATION_ERROR and R2
+  never sees it, gw_engine.py:614-617), a valid `payload_hash`, a key field, and **a checkpoint number <= C and <= the CLOSE_FINAL checkpoint**; the Gateway rejects
   it ELECTION_NOT_OPEN before the rules run at C; no view row is created for it; Core has refused nothing else in this
   variant. If its checkpoint is greater than CLOSE_FINAL, `events_after_close_final` is also non-zero and this label
   does not apply.
@@ -61,10 +69,7 @@ The labels were NOT derived from rules/ (Anik's code) or from any run. Every var
   check") names another cause; that is a legitimate B1 error and stays.
 
 ## Not labelled yet
-- **T15 (a to d).** R3 at the TALLY checkpoint has additional checks (TALLY.ballot_count + invalid_ballots, excluded_ballots,
-  final_checkpoint) whose `observed` keys are only written as `tally_*` in contracts/README.md; only the three R5 keys
-  of ballot-elgamal.md section 6 are named. The judge compares exact key sets, so the T15 labels need those R3 key
-  names first. They are not guessed here.
+- **T15 (a to d).** Labelled in a separate PR, with the exact key names fixed in contracts/README.md (v1.2.5).
 - T03 (concurrent duplicates), not in the mandatory list.
 
 ## Known gaps in the current rule engine (B1 will miss these; the labels do not change)
